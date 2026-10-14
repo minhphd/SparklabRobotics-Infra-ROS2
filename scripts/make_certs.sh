@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate the self-signed TLS cert the relay serves to the Quest.
+# Generate the self-signed TLS cert the Quest bridge serves to the headset.
 #
 #     ./scripts/make_certs.sh                 # cover every local address
 #     ./scripts/make_certs.sh 10.195.64.139   # ...plus/only the ones you name

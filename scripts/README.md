@@ -1,213 +1,114 @@
 # scripts
 
-Every command below is copy-pasteable from the repo root.
+Everyday commands. Run them from the repo root with the `sparklab-ros` env
+active and the workspace sourced (`source install/setup.bash`).
 
-**Shell scripts** are executable and anchor themselves to the repo root, so
-they work from any directory:
-
-    ./scripts/rollout.sh
-
-**Python scripts** are not executable, deliberately — each needs a specific
-interpreter, and a bare `./script.py` would pick up whatever `python3` is first
-on `PATH`. There is one invocation for all of them:
-
-    PY="PYTHONPATH=src /opt/miniforge/envs/robot-py312/bin/python"
-
-`robot-py312` is the env with **lerobot 0.6.0**, which `molmoact2` and `pi05`
-need. The `robot` and `teleop` envs are on 0.4.4 and cannot load these
-checkpoints.
-
----
-
-# I want to…
-
-## …run the robot
-
-**1. Start the arm servers. Always first** — they own the CAN loop and the
-torque; everything else is a client of them.
-
-    ./scripts/start_arm_servers.sh              # real hardware
-    ./scripts/start_arm_servers.sh --sim        # SimRobots + live MuJoCo windows
-    ./scripts/start_arm_servers.sh --sim --no-viewer  # headless
-
-Ports and CAN channels are overridable:
-`LEFT_CHANNEL=can0 RIGHT_CHANNEL=can1 LEFT_PORT=11333 RIGHT_PORT=11334`.
-
-**2. If an arm stops responding**, before anything else:
-
-    ./scripts/can_health.sh
-
-**3. Teleoperate**, no recording:
-
-    ./scripts/teleop_demo.sh
-    ./scripts/teleop_demo.sh --rerun-poses  # XR + commanded EE pose debug
-
-The shared Rerun view updates while the bridge is DISARMED; only XR frames from
-the headset are required. XR poses are rotated into arm-base axes, and Raiden's
-`~/.config/raiden/calibration_results.json` places the right arm in the left
-arm's frame. The XR and left-arm origins still coincide because Raiden has no
-Quest-to-arm translation calibration.
-
-**4. Record a dataset.**
-
-    ./scripts/record.sh              # timed episodes, voice-guided resets
-    ./scripts/record_manual.sh       # operator-keyed episodes
-
-`record_manual.sh` ignores the episode/reset timers: space or the Quest B/Y
-button starts and ends each episode (saved on end, then the arms park to
-zeros), `r` discards the one in progress, `q`/Esc exits. Stats reprint at every episode start; extra flags pass
-through to the underlying CLI.
-
-## …run a policy
-
-`rollout.sh` is the entry point; robot, policy and strategy are separate flags.
-
-| I want | command |
+| script | does |
 |---|---|
-| a fine-tuned checkpoint on the real arms | `./scripts/rollout.sh` |
-| the stock base checkpoint, for comparison | `./scripts/rollout.sh --policy=stock-typed` |
-| DAgger corrections (teleop takeover) | `./scripts/rollout.sh --mode=dagger` |
-| a policy in sim | `./scripts/rollout.sh --robot=sim --policy=stock` |
-| a policy in sim, retargetable while running | `./scripts/rollout.sh --robot=sim --mode=live` |
-| a policy on hardware, retargetable while running | `./scripts/rollout.sh --mode=live` |
-| a high-level agent driving the VLA | `--mode=live`, then `./scripts/harness.sh` |
-| to see the command without running it | add `--dry-run` |
+| `rollout.sh` | run a policy (real arms or Isaac) |
+| `record_manual.sh` | record a dataset, episodes started/ended with Space or B/Y |
+| `record.sh` | record a dataset with fixed-length episodes (`lerobot-record`) |
+| `harness.sh` | web page + AI agent in front of a running policy |
+| `make_certs.sh` | make the HTTPS certificate the headset needs |
+| `can_health.sh` | check the CAN bus when an arm stops responding |
+| `isaac_python.sh` | run something with Isaac Sim's Python |
+| `install_isaac_kernel.sh`, `start_isaac_jupyter.sh` | Isaac notebooks in VS Code |
+| `analysis/*.py` | tools for figuring out why a policy misbehaves |
 
-Unrecognised flags pass through to `lerobot-rollout`, so
-`--duration=120 --policy.num_flow_timesteps=4` works with no edit. `rollout.sh`
-checks that the arm servers / sim server / relay it needs are listening and
-names whichever is missing, instead of timing out inside `connect()`.
+Every workflow below needs the robot started first, in its own terminal:
 
-It is one self-contained file — robot, policy, strategy and runner are four
-blocks you can read top to bottom.
+```bash
+ros2 launch sparklab_yam yam.launch.py                     # real arms
+ros2 launch sparklab_yam yam.launch.py sim:=true viewer:=true cameras:=false   # no hardware
+```
 
-Sim rollouts need the Isaac server up first, in its own terminal:
+## Teleoperate
 
-    ./scripts/isaac_python.sh -m sparklab_sim.policy_server --port 8081
+```bash
+ros2 launch sparklab_yam yam.launch.py teleop:=true
+```
 
-Add `--physics` for anything involving **contact**. Without it the fingers
-teleport and cannot hold an object, so every grasp fails regardless of the
-policy. Leave it running between rollouts — Isaac costs ~15 s to boot — and it
-parks the arms on its own after 45 s idle.
+Headset controls are in [`sparklab_yam`](../src/sparklab_yam/README.md#the-teleop-node).
 
-Running two rollouts at once? Foxglove aborts on a bound port rather than
-falling back, so move both:
+## Record a dataset
 
-    FOXGLOVE_PORT=8766 CONTROL_PORT=8091 ./scripts/rollout.sh --robot=sim --mode=live
+Start the robot *without* `teleop:=true` (the recorder brings its own), then:
 
-**Driving a live rollout** from a second pane:
+```bash
+./scripts/record_manual.sh      # Space / B/Y start+end, r discards, q quits
+./scripts/record.sh             # fixed 30 s episodes
+```
 
-    sparklab-rollout-ctl
+Change the dataset name and task inside the script, or pass extra
+`--dataset.*` flags.
 
-    rollout> pick up the scissors     # bare text retargets the policy
-    rollout> reset                    # ramp home, clear the action queue
-    rollout> park / pause / resume / status
+## Run a policy
 
-Or from a browser with a high-level agent — see
-[`harness/README.md`](../src/lerobot_robot_sparklab/harness/README.md):
+```bash
+./scripts/rollout.sh                          # fine-tuned checkpoint on the real arms
+./scripts/rollout.sh --policy=stock-typed     # the stock checkpoint, for comparison
+./scripts/rollout.sh --mode=live              # ...and change its task while it runs
+./scripts/rollout.sh --mode=dagger            # human takes over with the Quest to correct it
+./scripts/rollout.sh --dry-run                # print the command, don't run it
+```
 
-    ./scripts/rollout.sh --mode=live      # terminal 2
-    ./scripts/harness.sh                  # terminal 3 -> http://127.0.0.1:8099
+Unknown flags pass straight to `lerobot-rollout` (e.g. `--duration=120`). The
+script checks that the robot is up before loading the model.
 
-If the arm feels sluggish, look for `loop running slower than target` and try:
+**In Isaac instead of on the real arms:**
 
-    CPU_CORES= ./scripts/rollout.sh --mode=live --no-foxglove
+```bash
+./scripts/isaac_python.sh -m sparklab_sim.policy_server --port 8081 --physics   # terminal 1
+./scripts/rollout.sh --robot=sim --policy=stock                                 # terminal 2
+```
 
-`--display_data` logs three camera images every tick, and `CPU_CORES` reserves
-cores. Why both matter, and why a `--policy.path` load takes no inference flags
-from a script, are in [`DESIGN.md`](../DESIGN.md#measured-constraints).
+**Changing the task of a live rollout:**
 
-## …work out why a policy is behaving badly
+```bash
+ros2 topic pub --once /rollout/task std_msgs/msg/String "{data: 'pick up the scissors'}"
+ros2 service call /rollout/reset std_srvs/srv/Trigger    # also: pause, resume, home, park
+```
 
-Run these in order — each rules out a layer, so a failure early on makes the
-later ones meaningless.
+Or with the web page: `./scripts/harness.sh`, then open `http://127.0.0.1:8099/`.
 
-**1. Is the pipeline itself correct?** Feeds recorded frames through the exact
-processors `lerobot-rollout` builds and compares against the human action. A
-large error here means an image-key or normalisation bug, not a bad policy.
+**If the arm moves sluggishly**, look for `loop running slower than target` in
+the log and try `--no-foxglove`. Two rollouts at once need different ports:
+`FOXGLOVE_PORT=8766 ROS_DOMAIN_ID=1 ./scripts/rollout.sh ...`.
 
-    $PY scripts/analysis/validate_policy_pipeline.py --checkpoint <ckpt>/pretrained_model
+## Figure out why a policy misbehaves
 
-**2. Does the policy read the instruction?** Swaps which object is named and
-measures the response against paraphrase and sampling noise.
+Run these in order; each rules out one layer.
 
-    $PY scripts/analysis/lang_probe.py --checkpoint <ckpt>/pretrained_model --in-scene
-    $PY scripts/analysis/lang_probe.py --checkpoint <ckpt>/pretrained_model --compare lerobot/MolmoAct2-BimanualYAM-LeRobot
+```bash
+# 1. Is the data pipeline right? (compares the policy to the recorded human action)
+python scripts/analysis/validate_policy_pipeline.py --checkpoint <ckpt>/pretrained_model
+# 2. Does it follow the instruction? (--in-scene: only objects that are visible)
+python scripts/analysis/lang_probe.py --checkpoint <ckpt>/pretrained_model --in-scene
+# 3. Is it jerky?
+python scripts/analysis/compare_action_noise.py --checkpoints <ckpt1> <ckpt2> --episodes 0 5 12 --frames 2
+# 4. Does it lunge toward the rest pose?
+python scripts/analysis/inspect_policy_chunks.py --checkpoint <ckpt>/pretrained_model --episode 5
+# 5. Does sim look different enough to matter? (needs the Isaac server)
+python scripts/analysis/compare_real_vs_sim_images.py --checkpoint <ckpt>/pretrained_model --port 8081
+```
 
-`--in-scene` restricts to objects visible in every probed frame; without it,
-naming an absent object counts as a failure when it is correct behaviour.
+Why is the loop slow? `profile_rollout.py` times each stage of a tick; it takes
+the `lerobot-rollout` flags plus `--ticks`.
 
-**3. Is it jerky?** Compares chunks from identical frames, with the human demo
-as the reference.
+## Make the headset certificate
 
-    $PY scripts/analysis/compare_action_noise.py \
-        --checkpoints lerobot/MolmoAct2-BimanualYAM-LeRobot <ckpt>/pretrained_model \
-        --episodes 0 5 12 --frames 2
+```bash
+./scripts/make_certs.sh                  # covers every IP of this machine
+./scripts/make_certs.sh 10.195.64.139    # or only the ones you name
+```
 
-**4. Does it lunge toward the stow pose?** Dumps whole 30-step chunks — the
-snap is invisible at step 0, because the robot executes all 30 open-loop.
+Writes `cert.pem` / `key.pem` in the repo root, where the launch file looks.
+The headset must accept a new certificate once, so don't regenerate casually.
 
-    $PY scripts/analysis/inspect_policy_chunks.py --checkpoint <ckpt>/pretrained_model --episode 5
+## Good to know
 
-**5. Does the sim look different enough to change its behaviour?** Same state
-and task, real images vs rendered. Needs the sim server running.
-
-    $PY scripts/analysis/compare_real_vs_sim_images.py --checkpoint <ckpt>/pretrained_model --port 8081
-
-## …work out why the loop is slow
-
-Per-stage timing of a real tick, separating inference from everything else.
-Takes all `lerobot-rollout` flags plus `--ticks` / `--warmup`.
-
-    $PY scripts/analysis/profile_rollout.py \
-        --policy.path=<ckpt>/pretrained_model \
-        --robot.type=yam_ultra_sim --robot.port=8081 \
-        --task="put the marker into the cardboard box" \
-        --duration=0 --ticks 70
-
-## …augment a dataset's instructions
-
-Groups task strings by the object they name, generates phrasings per object,
-and rotates each frame's `task_index` among them. Writes a new dataset with the
-videos hardlinked, so it costs megabytes rather than gigabytes.
-
-    # See the grouping and phrasings without writing anything
-    $PY scripts/augment_task_paraphrases.py --src <dataset> --dst /tmp/x --dry-run
-
-    $PY scripts/augment_task_paraphrases.py \
-        --src ~/.cache/huggingface/lerobot/minhphd/put-box \
-        --dst ~/.cache/huggingface/lerobot/minhphd/put-box-aug
-
-Check `OBJECT_OF` in that script first — it decides which strings name the same
-physical object, and merging two different objects teaches the model they are
-interchangeable.
-
-## …use Isaac
-
-    ./scripts/isaac_python.sh -m sparklab_sim.policy_server --port 8081
-    ./scripts/isaac_python.sh my_script.py
-    ./scripts/isaac_python.sh                    # REPL
-
-    ./scripts/install_isaac_kernel.sh            # once
-    ./scripts/start_isaac_jupyter.sh
-
-## …generate the relay's TLS cert
-
-    ./scripts/make_certs.sh                      # cover every local address
-    ./scripts/make_certs.sh 10.195.64.139        # ...or only the ones you name
-
-Regenerating invalidates the headset's one-time acceptance, so do not re-run it
-casually.
-
----
-
-# Known constraints
-
-**`--rename_map`** exists because checkpoints trained via `--policy.path`
-expect `top/left/right` while the dataset records `top/left_wrist/right_wrist`.
-A checkpoint whose `input_features` already say `left_wrist` must **not** get
-it — that is the `RENAME` block in `rollout.sh`, selected by `--policy`.
-
-**Two GPU-heavy processes will not both fit.** A rollout (~13 GB) plus the
-Isaac server (~4 GB) plus a diagnostic (~13–27 GB) exceeds 32 GB. Finish one
-before starting the next, or pass `--dtype bfloat16` where the script offers it.
+- **`--rename_map`**: some checkpoints call the wrist cameras `left`/`right`
+  instead of `left_wrist`/`right_wrist`. `rollout.sh` adds the rename only for
+  the `--policy` choices that need it.
+- **GPU memory**: a rollout (~13 GB), the Isaac server (~4 GB) and an analysis
+  script (~13–27 GB) won't all fit in 32 GB at once.

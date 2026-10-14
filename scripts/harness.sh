@@ -5,33 +5,12 @@
 #     ./scripts/harness.sh --agent gemini       # needs HARNESS_MODEL + GOOGLE_API_KEY
 #     ./scripts/harness.sh --agent none         # UI + REST only, nothing decides
 #
-# Needs a rollout with a control port already up — that process owns the cameras
-# and arms, this one does not:
+# Drives a live rollout over /rollout/*; that process owns the arms and the policy:
 #
-#     ./scripts/start_arm_servers.sh      # terminal 1
-#     ./scripts/rollout.sh --mode=live    # terminal 2  (control port 8090)
-#     ./scripts/harness.sh                # terminal 3
-#
-# Then open http://127.0.0.1:8099/ . Override CONTROL_PORT / PUBLISH_EVERY on
-# the rollout side.
+#     ros2 launch sparklab_yam yam.launch.py   # terminal 1
+#     ./scripts/rollout.sh --mode=live         # terminal 2
+#     ./scripts/harness.sh                     # terminal 3, then http://127.0.0.1:8099/
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-ROLLOUT="${ROLLOUT:-http://127.0.0.1:8090}"
-PORT="${HARNESS_PORT:-8099}"
-
-python - <<'PY' || { echo "[harness] activate the env holding this package: conda activate robot-py312" >&2; exit 1; }
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("lerobot_robot_sparklab") else 1)
-PY
-
-# Warn rather than fail: the UI is useful during the rollout's model load, and
-# recovers on its own once the control port appears.
-if ! curl -sf --max-time 2 -o /dev/null "$ROLLOUT/status"; then
-    echo "[harness] no rollout at $ROLLOUT yet — the UI will show it as down and" >&2
-    echo "          reconnect when it comes up (rollout_live --control-port)." >&2
-fi
-
-echo "[harness] http://127.0.0.1:$PORT   (rollout $ROLLOUT)"
-exec python -m lerobot_robot_sparklab.harness.server \
-    --rollout "$ROLLOUT" --port "$PORT" "$@"
+exec ros2 run lerobot_robot_sparklab harness --port "${HARNESS_PORT:-8099}" "$@"

@@ -1,379 +1,303 @@
 # Design notes
 
-Why things are the way they are. The READMEs describe *what* is where; this
-file holds the reasoning, the measurements behind it, and the failures that
-produced it. Nothing here is needed to run the stack — it is here so the
-decisions are not re-litigated or quietly undone.
+Why things are the way they are. The READMEs say *what* is where; this file
+keeps the reasons and measurements, so decisions aren't re-argued or quietly
+undone. You don't need any of it to run the robot.
 
-## Package boundaries
+## The big picture
 
-`sparklab_sim` is a separate top-level package from `lerobot_robot_sparklab`
-because Isaac Sim runs under its own bundled Python 3.12, which has no
-`lerobot`. Importing `lerobot_robot_sparklab` under it fails at the package
-`__init__`, which imports lerobot to register the robot plugins.
+**Why ROS 2.** Every part — arms, cameras, headset, policy — is a separate
+process that publishes and subscribes. Any of them can be restarted,
+replaced or inspected (`ros2 topic echo`) without touching the others.
 
-That makes the boundary a mechanical test rather than a matter of taste: **a
-module that imports lerobot cannot live in `sparklab_sim`**, whatever it is
-about. "Sim vs real" is the wrong axis. `rollout/` drives hardware and the twin
-alike and belongs on the lerobot side; `yam_ultra_sim` is a lerobot plugin for
-a simulated arm and belongs under `robots/`. The rollout runner and its REPL
-failed that test once and were moved.
+**One Python for everything.** ROS 2 Humble's normal packages use Python 3.10,
+but LeRobot needs 3.12. RoboStack builds Humble for 3.12, so ROS, LeRobot and
+i2rt load in one process — which the LeRobot robot and teleoperator need, since
+they are both LeRobot plugins and ROS nodes. Catch: torch loads the system's
+older C++ library first and ROS then fails (`CXXABI_1.3.15`). Putting the env's
+`lib/` first on `LD_LIBRARY_PATH` fixes it.
 
-Shared assets — the URDF, meshes, rig config — stay single-source: the sim side
-reads them **by path** out of the sibling package's tree (`sparklab_sim/paths.py`).
-One repo, one copy of the model, two interpreters, no import coupling.
+**Package split.** The ROS packages (`sparklab_yam`, `sparklab_quest`,
+`sparklab_cameras`) never import LeRobot, so they start in a second and never
+load torch. That is why the teleop logic (`QuestTeleop`) lives in
+`sparklab_yam` and LeRobot's teleoperator is a thin wrapper. `sparklab_sim`
+runs on Isaac's Python, which has neither ROS nor LeRobot, so the rule there is
+mechanical: nothing in it may import either. It reads the shared model files by
+path instead.
 
+**Standard messages only.** Custom `.msg` types need a C++ build step; every
+topic here fits standard types. The two JSON-in-a-string topics
+(`/quest/settings`, `/rollout/status`) are UI payloads only the UI reads.
 
-## The arms run in their own processes
+## The arm drivers
 
-i2rt's CAN thread must keep sending inside each motor's watchdog window.
-In-process it shared a GIL with policy inference and checkpoint loading, got
-starved, and the motors reported `loss communication` (0xD) mid-run — while
-every SocketCAN fault counter read zero. The wire was clean; the frames simply
-were not sent in time. Separate process, separate GIL.
+**One process per arm.** i2rt's CAN thread must send within each motor's
+watchdog window. When it shared a process (and Python's GIL) with policy
+inference, it got starved and the motors reported `loss communication` (0xD)
+mid-run, while every CAN error counter read zero — the wire was fine, the
+frames just weren't sent in time. `scripts/can_health.sh` tells the two apart:
+nonzero counters mean wiring, zero counters with errors mean timing.
 
-`scripts/can_health.sh` is what distinguishes the two causes: nonzero error
-counters mean the physical layer, all-zero counters with motors still
-complaining mean host timing.
+**Two clamps.** The driver clamps every command to `max_step` from the measured
+pose, so nothing — not even a typo in `ros2 topic pub` — can jump an arm. The
+LeRobot robot clamps the same way first, so the action it records is the one
+the arm actually got.
 
-**Ownership.** The `arm_server` process owns the motors, the CAN link and the
-torque, and holds no policy: the Δq clamp, gripper flip, cameras and park
-timing stay follower-side. The exception is parking on its own shutdown, which
-the follower cannot do if that process is killed directly.
+**Silence means dead.** When i2rt's control loop dies, `get_joint_pos()` keeps
+returning the last pose, so the arm *looks* fine while ignoring commands. So the
+driver stops publishing `joint_states` the moment the loop dies, and clients
+refuse joint states older than 0.5 s.
 
-**Transport.** One tick is two round trips per arm, issued in parallel: `read`
-for joint angles and `command_clamped` for read+clamp+command under one lock.
-Merging the read/command pair halved the RPC rate and closed the window in
-which the arm could move between reading `present` and commanding. Known cost:
-portal's client socket spins rather than blocking while a call is in flight,
-about one core per client. Merging both arms into one server would halve that.
-
-**Liveness is cached, not polled.** i2rt exposes it as `motor_chain.running`;
-over RPC that would be a round trip per `is_connected` check, so every response
-carries the flag. This matters because a dead chain is exactly the case you
-cannot detect by asking: `get_joint_pos()` keeps returning the last pose it
-read, so the robot looks healthy while every command goes nowhere.
+**Parking.** i2rt's `close()` cuts torque wherever the arm is, so the driver
+first ramps every joint to zero — the folded rest pose, where every recorded
+episode starts. It parks on its own shutdown because nothing else can if its
+process is killed.
 
 ## Teleoperation
 
-**The frame is ground-referenced and headset-yaw aligned.** WebXR `local-floor`
-is Y-up with the origin on the floor. At every clutch anchor, headset yaw is
-composed with `r_calib`, so controller-forward follows the direction the
-operator is facing. Pitch and roll are discarded, and turning the head while
-the clutch remains held does not move the arm; the new yaw takes effect at the
-next engage or re-anchor.
+**Forward is where you're facing.** Each time you press grip, the mapping takes
+the headset's current heading, so pushing "forward" moves the arm away from you
+even after you turn around. Only yaw is used, and turning your head mid-grip
+changes nothing until the next press.
 
-**The clutch re-anchors on every engage**, capturing both the controller pose
-and the arm's current EE pose, so motion always resumes from where the arm
-actually is. Walking around between engages changes nothing: the delta is
-measured from the newest engage, never an accumulated origin.
+**Grip re-anchors every time**, on the arm's last *commanded* pose, not its
+measured one. The measured pose lags by a slightly different amount each time,
+so anchoring on it made the arm drift on every press. A background re-sync
+thread was tried and removed: it raced LeRobot's startup and tangled the
+teleop with the robot. Now whoever moves the arms by other means calls
+`seed()` (the teleop node after arm/disarm, `record_manual` after parking).
 
-The IK step takes the current EE pose from FK of the last *commanded* qpos, not
-from the robot. Every orchestrator that changes ownership or moves the arm
-directly must call `seed_qpos_from_obs()` before returning control to teleop.
+**Reach limits absorb extra motion.** The target can't run more than
+`pos_reach_limit` / `rot_reach_limit` ahead of the arm; extra hand motion is
+dropped, like a mouse at the edge of the screen. Without this, pushing past a
+joint stop built up a huge error that made the arm shake at full speed, and
+twisting far enough snapped the wrist round the other way. The cost: dropped
+motion is gone, and with a rotation gain ≠ 1 curved hand paths don't map
+exactly (a 60°+60° loop at 1.5× leaves ~23°). Re-gripping realigns.
 
-**The clutch anchors on the commanded pose, never the measured one.** Measured
-lags commanded by the tracking error (gravity sag, controller stiffness), and
-that error differs a little every time — an engage anchored on the measurement
-commands the arm back to a slightly different EE pose on every clutch press.
-An earlier version seeded from the measurement on each engage and later added
-a background idle-resync thread. That coupled a teleoperator to whichever
-follower happened to be stored in process-global state, raced LeRobot's connect
-order, and could stall the WebSocket reader during robot RPC. Resynchronization
-is now an explicit orchestration step; the standalone bridge does it after
-startup and every arm/disarm motion.
+## Inverse kinematics
 
-### Absorbing reach limits
+Joints 1–3 handle position, 4–6 orientation, one damped step per tick. The
+wrist isn't perfectly spherical (6.2 cm offset), so twisting adds a small
+position error; the operator corrects by eye.
 
-With `rot_reach_limit` / `pos_reach_limit` active, the mapper becomes
-incremental: per-tick controller deltas accumulate, and anything past the limit
-is absorbed — a slipping clutch, or a mouse at the edge of the screen. Two
-hardware failures this kills:
+`solve()` never fails or freezes. Four edge cases:
 
-- A demand pressed far past a joint stop or gimbal can never build the ~180°
-  error where the shortest-way direction flips, which showed up as cap-speed
-  shaking.
-- It can never wrap around and snap the wrist in from the other side. 350°
-  clockwise and 10° counter-clockwise are the same orientation, and an absolute
-  mapping must eventually agree with that; an incremental one never has to.
+1. **Edge of the workspace** — damping grows so the step shrinks smoothly to zero.
+2. **Wrist gimbal lock** (joint 5 near ±90°) — same trick for the wrist; the
+   old exact solution demanded 68° of joint motion per 1° of twist there.
+3. **Joint limits** — clamped, so the arm reaches as far as it can.
+4. **Twist demanded nearly 180° away** — the wrist holds still. The
+   shortest-way direction flips with tiny hand tremor there, which made the
+   arm shake (reproduced in sim at ~150° with 0.2° of tremor).
 
-Unbounded position error had the same shape: reaching past the workspace
-boundary produced cap-speed bang-bang on joints 1-3.
+## The arm model
 
-The trade is that absorbed motion is gone, and with `scale_rotation ≠ 1` the
-per-increment gain is a *rate* gain, so curved hand paths are path-dependent on
-SO(3) — a closed 60°+60° loop at 1.5× leaves ~23° of residual. Hand↔EE
-correspondence therefore drifts within an engagement; re-clutching realigns.
-The alternative, scaling the total delta, wraps at 360°/scale of raw twist and
-reintroduces the come-around this exists to kill.
+Copied byte-for-byte from i2rt v1.2.4, with one deliberate change: joint 3's
+upper limit is **3.0 rad**, not π, because this rig's elbow hits its stop
+around 3.0. Wrong limits fail silently both ways — too tight is an invisible
+wall, too loose grinds into the stop — so after any i2rt upgrade run
+`python -m sparklab_yam.model.kinematics`. Meshes don't affect kinematics.
 
-## Decoupled IK
+## Cameras
 
-Joints 1-3 satisfy position, joints 4-6 orientation, each one damped
-least-squares step per call warm-started from the caller's qpos. The 6.2 cm
-wrist non-sphericity becomes a residual EE position error when the wrist
-rotates; the operator's visual feedback loop closes that gap.
+**One owner.** A RealSense can only be opened by one process. The old setup had
+the headset relay and the recorder each opening them, so recording meant
+turning off the headset video. Now the camera node owns them and everyone
+subscribes.
 
-`solve()` always returns a valid qpos6 — never None, never an exception. Four
-boundary cases are handled in-line so the arm degrades gracefully instead of
-freezing:
+**Depth.** Every camera also publishes depth, aligned to its colour image, so
+one pixel means the same point in both and one set of intrinsics serves both.
+Alignment costs 1.9 ms per wrist frame and 6.6 ms per top frame. Depth is
+converted to millimetres (ROS's convention for 16-bit depth) because the
+cameras disagree on units: 1 mm on the D435F, 0.1 mm on the D405s. All three
+sustain colour + depth at full rate, the D405s even on USB 2.1.
 
-1. **Near the workspace boundary** the position Jacobian is ill-conditioned.
-   Manipulability-adaptive damping shrinks the step smoothly to zero at the
-   singularity.
-2. **Near wrist gimbal lock** (θ5 → ±π/2, joint-4/6 axes aligned) the
-   orientation Jacobian loses rank. The same damping recipe applies to the
-   wrist sub-solve: J4/J6 steps stay bounded and the lost rotation direction is
-   simply not tracked until the operator backs off. The closed-form Euler
-   extraction this replaced demanded 68° of J4/J6 per 1° of target twist at
-   θ5 = 89.5°.
-3. **Joint limit violation** clamps elementwise into the model's limits, so the
-   arm reaches as far as the joints allow.
-4. **Near-antipodal orientation demand** past `rot_err_hold` parks the wrist.
-   The shortest-way error direction is unstable there — it flips sign under tiny
-   target jitter — and chasing it with capped steps became bang-bang oscillation
-   at the Δq cap. Reported by operators as shaking when twisting far past the θ5
-   stop; reproduced in sim at ~150° error with 0.2° of hand tremor.
+**Image speed.** Assigning `bytes` to `Image.data` takes ~90 ms for a 720p
+frame (rclpy copies it element by element) and capped the top camera near
+4 Hz. Assigning an `array.array('B')` takes 0.1 ms; with it all three cameras
+run at full rate (30/15/30 Hz, ≤ 3 ms latency) on the default DDS. CycloneDDS
+was no better.
 
-Differential steps are continuous by construction, so the old ±2π branch-unwrap
-heuristics are unnecessary.
+**Point clouds in the camera node.** The node already holds each aligned frame,
+so building a cloud there costs 0.45 ms (wrist) / 0.9 ms (top); a separate
+`depth_image_proc` node would add a dependency and a second copy of every image.
+Every 4th pixel at ≤ 10 Hz keeps a cloud at 0.3 / 0.9 MB, light enough for
+Foxglove over a laptop link, and nothing is built unless someone subscribes, so
+recording is unaffected. TF is rooted at `left_base` because the top camera was
+calibrated against the left arm; `right_base` hangs off it through the top camera.
 
-## The vendored arm model
+## Camera calibration
 
-`yam_ultra.xml`, `yam_ultra.urdf` and the meshes are copied byte-for-byte from
-i2rt v1.2.4. That release's frame-alignment pass replaced the hand-simplified
-body frames with the URDF's native ones, which is why `j4_anchor` and
-`LINK6_MOUNT_POS`/`QUAT` had to be recomputed rather than copied. It also fixed
-an upstream bug that had joint2/joint3's upper limits swapped.
+**Zero gravity is a driver service**, because only the driver may touch the
+motors. While it's on, the driver ignores commands, so a forgotten teleop can't
+fight the person moving the arm. Turning it off holds the arm where it is — no
+ramp anywhere.
 
-**Joint limits deviate deliberately.** `INTENTIONAL_DEVIATIONS` carries
-joint3's upper limit at 3.0 rad against i2rt's nominal π. i2rt's XML is nominal
-for the arm family; this rig's elbow stops around 3.0 and commanding past that
-grinds it into the stop. Not drift — do not "fix" it back.
+**Zero gravity follows Raiden's tested recipe**, after i2rt's own mode let the
+arm fall: arm kp to 0 with kd kept (a released arm can't run away), the
+gripper's gains untouched, and the gravity factor at 1.0 while floating. The
+real culprit was mass: our gripper weighs 0.953 kg (Raiden's `arms.json`), but
+i2rt models the stock 0.553 kg one. The holding factors stay separate, since
+they also cancel friction and tracking error under kp.
 
-Getting limits wrong is quiet and nasty in both directions, because the IK
-reads them straight off this model and both clamps into them and derives its
-limit-pressure haptic from them. Too tight gives an invisible wall short of
-real travel; too loose drives into a mechanical stop believing there is room.
-Re-run the check after any i2rt upgrade:
+**The left arm's joint 4 zero was 5–7° off.** Hand-eye calibration stalled at
+7.5 mm / 1.6° with a 0.2–0.3 px board fit, so the camera was fine; a fitted
+joint-4 offset of −6.6° brought it to 1.7 mm / 0.28°. With the gripper held
+level it read +5.04°, so motor 4 on `can_left` was re-zeroed there on
+2026-10-14 (shift 0.0879 rad): left joint 4 recorded before then reads 0.0879
+rad higher. Joint 5 read −3.4° in that by-eye pose but the fit put it within
+0.4°, so it was left alone. Recalibrating then gave 4.0 mm / 0.61°, with −1.3°
+still fitted on joint 4; even with joints 2–5 free, ~3 px remain against a
+0.25 px board fit — the arm's own accuracy. The right arm's joint 4 read +4.36°
+with its gripper level, the same way, and was re-zeroed there the same day
+(shift 0.0761 rad). Both arms erring alike points at how they were zeroed.
+Calibrating afterwards still fitted −1.3° (left) and −1.6° (right) on joint 4:
+a phone level on the gripper lands ~1.5° short of the model's zero.
 
-    python -m lerobot_robot_sparklab.robots.yam_ultra.model.kinematics
+**Captures need a still arm.** The arm pose (100 Hz) and the image (15–30 Hz,
+tens of ms late) are matched by timestamp, so motion during a capture becomes
+calibration error. The node refuses unless the gripper moved less than 1 mm and
+0.2° in the last half second.
 
-Meshes never affect kinematics — MuJoCo builds FK and Jacobians from body
-frames and joint axes — and gravity compensation runs on i2rt's model, not this
-one. Keep them in sync anyway so the viewer shows the arm that is moving.
+**How the error is measured.** The board never moves (on the table, or on the
+gripper), so every capture should predict the same board pose through the
+answer. The spread of those predictions (mm, °) and the reprojection error (px)
+say how well the answer fits. Hand-eye calibration needs rotation about at
+least two different axes, hence the warning below 30° of rotation spread.
+
+Solved with OpenCV's Park method. Checked on synthetic captures with 0.3 px
+noise (within 2 mm / 0.3°) and end to end against the sim arm with a rendered
+camera (1.1 mm / 0.28°).
+
+## The Quest bridge
+
+**HTTPS with the right certificate.** The headset only allows VR on secure
+pages, and it rejects certificates without a `subjectAltName` outright — which
+a plain `openssl req -x509` produces. `make_certs.sh` puts every local IP in
+it, so one cert works on the LAN, the campus network and a USB tunnel.
+
+**H.264 video**, because the Quest decodes it in hardware; VP8 is software.
+
+**Settings are latched.** The page sends its slider values when it connects.
+Publishing them as a latched topic means a teleop that starts later still gets
+them.
+
+## Shutting down safely
+
+**Signals.** By default, Ctrl-C makes rclpy shut ROS down immediately — after
+which the teleop can't send the arms home and LeRobot can't ask the drivers to
+park. So every process here handles Ctrl-C itself and ignores a second Ctrl-C
+while parking. The launch file gives the drivers 20 s (instead of 5) before
+escalating, because parking takes 5 s. A background job starts with Ctrl-C
+ignored, so the nodes re-enable it explicitly.
+
+**Background spinning.** In Humble, shutting an executor down while another
+thread is spinning it crashes the process ("terminate called without an active
+exception"). Background spinners loop on `spin_once` and are joined first; an
+`atexit` hook does the same if a process dies with one still running.
 
 ## The Isaac twin
 
-**Kinematic, not dynamic, by scope decision.** Nothing simulates contact,
-torque or grasping; the arms are posed. The policy consumes RGB plus joint
-state and emits joint positions, so nothing in that loop asks the simulator
-what force a gripper applies. Skipping dynamics also skips the system
-identification — joint friction, damping, drive gains, contact parameters —
-that none of the recorded data can supply. A policy will happily "grasp"
-through the box. Right tool for checking that a checkpoint produces sane,
-in-range, temporally coherent actions from real camera geometry; wrong tool for
-judging whether a grasp succeeds.
+**Poses, not physics.** The policy reads images and joint angles and outputs
+joint angles; nothing asks the sim for forces. Skipping dynamics also skips
+tuning friction and gains that no recording could tell us. A policy can
+"grasp" through the box — good for checking actions are sane, not for judging
+grasps.
 
-**`yam_ultra_sim` is a separate robot, not `--robot.sim=true`.** That flag
-already exists on the hardware follower and does something different: it spawns
-kinematic `arm_server`s so the joints move with no CAN bus. It does nothing
-about cameras — those stay real RealSense devices. A policy needs images, so a
-rollout with no hardware needs a *rendered* rig, which is this.
+**A separate robot type.** `sim:=true` on the launch only fakes the arms; the
+cameras stay real. A policy without hardware needs *rendered* cameras, hence
+`yam_ultra_sim`. It stays on HTTP because Isaac's Python can't load ROS.
 
-**The Δq caps are shared by hardware and simulation.** The default lives in
-`robots/yam_ultra/constants.py`; each config still receives its own list. An
-unclamped sim silently flatters the policy — a chunk that would be cut to
-0.15 rad on hardware executes in full, so the failure you are hunting cannot
-reproduce.
+**Same clamps as hardware.** An unclamped sim flatters the policy: a jump that
+hardware would cut to 0.15 rad runs in full, hiding the bug you're looking for.
 
-**Parking matters between runs.** The sim server is a persistent workspace;
-disconnect deliberately leaves it running so the next rollout does not pay
-Isaac's ~15 s boot. That means whatever pose a run ends in is the pose the next
-run starts from, and LeRobot captures it as its "initial position" and restores
-to it at teardown — so one bad ending becomes permanent. Measured on a run that
-ended without parking: the right arm sat 44 sigma outside the pose any demo
-starts from, and the policy flailed. All joints at zero is the folded rest pose
-and where every recorded episode starts; across 49 demos the mean start pose is
-`left_joint_2 = 0.034`, `left_joint_3 = 0.022`, and no episode begins elsewhere.
+**Park between runs.** The sim server stays up between rollouts, so a run's
+last pose is the next run's start — and LeRobot then restores to it. One run
+that ended unparked left an arm 44 sigma away from any demo's start pose, and
+the policy flailed. All 49 demos start at zero. A clean disconnect parks; the
+server's idle auto-park covers crashes (only `/step` counts as activity).
 
-A clean disconnect parks itself. A killed or crashed rollout never reaches that
-code, which is what the server's own idle auto-park (`--auto-park-s`) covers.
-Only `/step` counts as activity: polling `/obs` is watching, not driving.
+**Isaac on the main thread only.** `app.update()` called from a request thread
+never returns — it hangs silently while `/health` keeps answering. So requests
+queue work and the main loop does it. Rendering all cameras on one update
+instead of one per camera took an observation from ~116 ms to ~40 ms.
 
-**Isaac work runs on the main thread, always.** `app.update()` is main-thread
-affine. Called from a request handler it does not raise — it simply never
-returns, and the request hangs until the client's timeout while `/health`
-carries on answering perfectly, which makes it look like a network problem
-rather than a threading one. So handlers do no Isaac work: they queue a job,
-block on an Event, and the main loop drains the queue, renders and wakes them.
-That is also why the main loop polls at 1 ms rather than sleeping in chunks —
-it is the only thread that can service a tick.
+**Fast scene editing.** `live.py` loads the scene as a sublayer and reloads only
+that layer: ~0.04 s per edit, against ~0.38 s to reopen the stage or a full
+reboot. Reopening the root layer deletes the render products and segfaults,
+hence `Renderer.close()`. The timeline is always playing (joint writes need it),
+so a reload bounces it to reset physics-owned objects.
 
-**One pump for all cameras.** Every render product advances on the same
-`app.update()`, so pumping per camera does the same global work three times
-over: at `settle=2` that is 6 updates a tick where 2 will do. Measured, the
-difference between ~116 ms and ~40 ms per observation.
-
-### The live viewer's fast path
-
-The scene file is loaded as a **sublayer** of an anonymous wrapper stage rather
-than opened directly:
-
-    wrapper stage (anonymous root)
-      ├─ session layer : free camera, overview camera   (never saved)
-      └─ sublayer      : scene.usda                     (the file you edit)
-
-Reloading is then `Sdf.Layer.Reload()` on that one sublayer, which recomposes
-the scene while leaving everything else alone — including the Replicator render
-products under `/Render`. Measured: **~0.04 s** per edit, against ~0.38 s to
-tear down and reopen the stage, against a full Isaac boot (8-30 s) for the
-version that called `open_stage` with live render products attached and
-segfaulted every time.
-
-Render products are prims too. Reopening or reloading the *root* layer deletes
-them under Hydra's feet:
-
-    [Error] [rtx.hydra] Invalid USD RenderProduct Prim: .../Replicator_01
-    [Error] [omni.hydra] Unable to find RP Prim from previous update pass!
-    Segmentation fault
-
-Hence: cameras authored into the session layer, content edited in a sublayer,
-and `Renderer.close()` before any reopen. That crash is also why
-`Renderer.close()` exists at all — it used to be absent, and the viewer's
-teardown probed for `close`/`destroy`/`detach` on the Renderer, found none
-(`destroy` is on the underlying HydraTexture) and silently did nothing.
-
-**`--play` does not start physics.** The timeline is *always* playing, because
-`scene.start()` has to play it before Isaac will accept joint writes at all.
-That used to be harmless with gravity off, but the props are now dynamic rigid
-bodies, so PhysX owns their poses and writes the simulated transform back every
-step. A layer reload changes the authored value and PhysX overwrites it, which
-looks like "I edited the position and the viewer ignored me". `reload_layers`
-therefore bounces the timeline, because stopping is what resets simulated prims
-to their authored state.
-
-### Why not Isaac's WebRTC livestream
-
-It ships no browser client in this install (`omni.kit.livestream.webrtc` has no
-HTML under it), wants a separate NVIDIA streaming app plus signal port 49100,
-and carries media over UDP — which does not survive an SSH tunnel, because
-`ssh -L` forwards TCP only. The MJPEG viewport is one TCP port that VS Code's
-Remote-SSH forwards automatically, and the client is a browser tab.
-
-The cost is that orbiting round-trips to the workstation. On a LAN that is
-imperceptible; on a slow link it feels like dragging through treacle rather
-than dropping frames.
+**Not Isaac's WebRTC stream**: it has no browser client here, needs extra ports,
+and uses UDP, which SSH tunnels can't carry. The MJPEG view is one TCP port.
 
 ## Rollout control
 
-**Changing the task must also reset the engine.** The policy emits a 30-step
-chunk and the loop drains it one action at a time. Swapping `engine._task`
-alone leaves up to 30 already-queued actions — 1.5 s at 20 Hz, longer with
-interpolation — still executing under the *old* prompt, so the arm appears to
-ignore the new command and then lurch. `retarget()` clears the queue.
-
-**Reset ramps, it does not teleport.** Home is reached by commanding an eased
-trajectory over `home_duration_s`, one waypoint per tick through `send_action`,
-so it still passes the follower's `max_relative_target` clamp like any policy
-action. Letting the clamp rate-limit a single target instead ramps at whatever
-the cap allows — 0.15 rad/tick at 30 Hz is ~4.5 rad/s — so the arm snapped home
-at the fastest speed the safety bound permitted, which reads as a jolt.
-Commanding the trajectory makes speed a property of *this move* rather than a
-side effect of a limit; the clamp stays underneath as a backstop. Smoothstep
-easing puts peak velocity at 1.5× the average, still an order of magnitude
-under the clamp.
-
-**Reset parks and holds.** Homing while the loop keeps stepping means the next
-tick drives the policy on the unchanged task and the arm climbs straight back
-out — which is what made `reset`/`park`/`home` look like they did nothing. All
-three set `held`; a new task clears it.
-
-**HTTP handlers never touch the robot or the policy.** They append to a queue
-the control loop drains between ticks — the same discipline `policy_server`
-uses, and for the same reason: neither the robot transport nor the inference
-engine is thread-safe, and a blocking call from an HTTP thread deadlocks the
-loop rather than failing.
+- **A new task clears the queue.** The policy plans 30 steps at a time; without
+  clearing, up to 30 old-task actions (1.5 s) run first and the arm seems to
+  ignore you, then lurches.
+- **Going home is a smooth move**, not one big target. Letting the clamp limit
+  a single jump meant moving home at the fastest allowed speed (~4.5 rad/s),
+  which felt like a jolt. Peak speed is now ~0.9 rad/s.
+- **Reset holds.** Otherwise the next tick runs the policy again and the arm
+  climbs straight back out, so reset looked like it did nothing.
+- **ROS callbacks only queue.** Neither the robot nor the model is thread-safe;
+  the control loop applies commands between ticks.
 
 ## The agent harness
 
-Two processes on purpose. The rollout holds a ~21 GB model and a live control
-loop, and restarting it costs ~90 s. Editing a prompt, swapping agents or
-reloading the UI must not imply restarting that. It also means a crash in the
-harness cannot take the arms down — the worst case is the robot continuing on
-its last instruction, which is why the loop only ever sets a task and the human
-keeps pause and reset.
+Separate from the rollout on purpose: the rollout holds a ~21 GB model and
+takes ~90 s to restart, while the harness can restart any time. If it crashes,
+the robot keeps doing its last task. An agent can only set a task or say it's
+done — it can't park or stop the robot, so a confused agent picks a wrong step
+rather than doing something drastic. A generation counter drops any decision
+that was in flight when you pressed stop.
 
-**What an agent may do: emit a task string and declare the goal complete.**
-That is all. It cannot park, reset or stop the robot. An agent that can
-retarget can already move the arms, so this is not a security boundary; it is a
-blast-radius one. A confused agent picks the wrong subtask, it does not decide
-to power down mid-motion.
+## Two rules plugin discovery depends on
 
-The agent generation counter exists because a turn takes a second or two (a
-model call), and a task decided *before* the operator hit stop must not be
-applied *after* it — that is a reset being silently undone by a decision
-already in flight.
+- **The package name starts with `lerobot_robot_`.** LeRobot imports every
+  installed package with that prefix; that import registers our robot types.
+- **The package `__init__.py` re-exports every Robot and Teleoperator class.**
+  LeRobot looks for the class next to its config; without the export you get
+  `Could not locate device class 'YamUltraFollower'`.
 
-## The relay's TLS cert
+## Measured on this rig
 
-WebXR needs a secure context, so the relay must serve HTTPS and the headset
-must accept the cert. Browsers have ignored the CN field for hostname
-verification since Chrome 58: a cert without a `subjectAltName` is invalid for
-*every* name, and the Quest browser rejects it outright rather than offering
-"proceed". A bare `openssl req -x509` with default answers produces exactly
-that cert, which is the trap `scripts/make_certs.sh` exists to close.
+- **Trust the checkpoint's `config.json`.** Forcing `--policy.use_amp=true` on a
+  bfloat16 model wraps it in float16 autocast: slower *and* worse actions.
+- **Loop speed is arm speed.** One tick = one action of a trajectory learned at
+  30 fps, so a slow loop plays it in slow motion. Foxglove's `--display_data` and
+  CPU pinning both slowed the arm visibly.
+- **CPU pinning backfired**: 30 Hz unpinned vs ~4 Hz with `taskset -c 0-5` — a
+  rollout alone uses ~400% CPU.
+- **Skipping "wasted" preprocessing made the policy worse.** The sync engine
+  preprocesses images every tick and uses 1 in 30 (12.5 ms each). Bypassing it
+  was tried and reverted.
+- **`max_relative_target` caps step size, not speed.** Speed comes from the motor
+  gains; capping the step bounds the error spike.
+- **RTC inference needs `n_action_steps / fps > inference time`**, or whole
+  chunks get dropped and the arm doesn't move. Sync inference instead pauses
+  the loop ~275 ms every 30 ticks.
+- **Validate a checkpoint offline first** with
+  `scripts/analysis/validate_policy_pipeline.py`.
 
-Every local IPv4 goes in the SAN, so one cert works on the lab LAN, over the
-campus link, and over an `adb reverse` USB tunnel. Regenerating invalidates the
-headset's acceptance, so do not re-run it casually.
+## Removed in the ROS 2 migration
 
-H.264 is forced for video because the Quest's hardware decoder is strongest
-there; VP8 is software-decoded, so higher CPU and worse latency under load.
+So they aren't re-added without knowing why they went:
 
-## Measured constraints
-
-On this rig, not assumed. Kept so they are not rediscovered.
-
-- **A checkpoint's `config.json` is the source of truth for inference.** Do not
-  re-specify dtype, chunking or amp from a script. Forcing
-  `--policy.use_amp=true` onto a checkpoint that says `use_amp: false` wraps a
-  bfloat16 model in fp16 autocast — that flag *is*
-  `torch.autocast(device_type="cuda")`, which defaults to **float16** — giving
-  narrower range (max 65504 vs 3.4e38) and a cast around every eligible op.
-  Slower *and* worse actions.
-
-- **Loop rate is arm speed.** One tick consumes one action, and a chunk is a
-  trajectory the policy learned at 30 fps. A loop that misses 30 Hz plays that
-  trajectory in slow motion; this is not a velocity setting. Anything costing
-  per-tick time (foxglove `--display_data`, a tight `taskset`) shows up as a
-  visibly slower arm. `rollout/live.py` logs `loop running slower than target`.
-
-- **CPU pinning starved the loop it was meant to protect.** On this 24-CPU
-  workstation a live rollout is ~400% CPU across 140 threads, and the two arm
-  servers another ~171%, against the 600% ceiling `taskset -c 0-5` imposes.
-  Measured 30 Hz unpinned against ~4 Hz pinned, same checkpoint. It was never
-  intra-process isolation anyway: inference and CAN polling share one GIL,
-  which affinity does not change.
-
-- **The sync engine preprocesses every tick and discards 29 of 30.** Measured
-  12.47 ms of image resize and tokenisation per pop-only tick, whose output
-  `select_action` never reads. Skipping it was tried and **reverted** — it made
-  the policy visibly worse, so the redundant work is load-bearing somewhere. Do
-  not re-add a preprocessor bypass without measuring behaviour, not just tick
-  time.
-
-- **`max_relative_target` is a position-*step* cap, not a velocity limit.**
-  Nothing bounds how fast the motors close a commanded step — that is the PD
-  gains. Bounding the step is what bounds the resulting error spike, which is
-  why the step is what gets capped.
-
-- **RTC inference needs `n_action_steps / fps > inference_time`**, or it
-  discards whole chunks and the arm does not move. `--inference.type=sync`
-  instead stalls the loop for the whole inference — ~275 ms measured, once
-  every 30 ticks.
-
-- **Validate checkpoints before hardware.** A policy whose error exceeds the
-  motion it must command will move erratically no matter how healthy the rig
-  is. `scripts/analysis/validate_policy_pipeline.py` catches that in minutes
-  without powering anything.
+- **`arm_server` / `arm_client`** (portal RPC) → the driver node.
+- **The WebSocket relay and `XRFrameClient`** → the bridge publishes topics.
+- **`sparklab-rollout-ctl`** → `ros2 topic pub` / `ros2 service call`.
+- **Single-arm teleop scripts and `pure_sim.py`** → the teleop node with
+  `hands:=[right]`, or `sim:=true`.
+- **`--robot.sim`** (the robot starting its own sim servers) → `sim:=true` on the
+  launch. That also removed the "is this server sim or real?" check, which only
+  existed to catch leftover servers it had started.
+- **`gripper_flip`** — never used.
+- **The Rerun pose viewer** — the poses are topics now; any ROS viewer shows them.
+- **Gripper force haptics** — nothing ever supplied gripper torque, so it never
+  ran. Gripper effort is in `/<arm>/joint_states` if it comes back.
+- **The DAgger hooks** (`is_engaged`, `is_handoff_pressed`, …) — on request;
+  `record_manual` reads B/Y from `/quest/<arm>/joy` instead.
+- **`cameras/streaming.py`** — any ROS image viewer shows `/cameras/*`.

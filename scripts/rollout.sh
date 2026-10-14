@@ -13,9 +13,9 @@
 #
 #     ./scripts/rollout.sh --duration=120 --policy.num_flow_timesteps=4
 #
-# Env knobs: FINETUNED_PATH STOCK_REPO FOXGLOVE_PORT CONTROL_PORT CPU_CORES
+# Env knobs: FINETUNED_PATH STOCK_REPO FOXGLOVE_PORT CPU_CORES PUBLISH_EVERY
 #            DAGGER_EPISODES DAGGER_REPO_ID DAGGER_RECORD_AUTONOMOUS
-#            RELAY_WS_URL ROLLOUT_SKIP_PREFLIGHT
+#            ROLLOUT_SKIP_PREFLIGHT
 
 set -euo pipefail
 
@@ -26,7 +26,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 FINETUNED_PATH="${FINETUNED_PATH:-../SparkRobot/MolmoAct2/lerobot_training/last/pretrained_model}"
 STOCK_REPO="${STOCK_REPO:-lerobot/MolmoAct2-BimanualYAM-LeRobot}"
 FOXGLOVE_PORT="${FOXGLOVE_PORT:-8765}"
-CONTROL_PORT="${CONTROL_PORT:-8090}"
 
 ROBOT=hw
 POLICY=finetuned
@@ -43,7 +42,7 @@ usage: rollout.sh [--robot=hw|sim] [--policy=finetuned|stock|stock-typed]
                   [--mode=base|dagger|live] [--task=STR] [--duration=N]
                   [--no-foxglove] [--dry-run] [extra lerobot-rollout flags...]
 
-  --robot    hw          real arms, via the arm_server processes on CAN (default)
+  --robot    hw          real arms, via the sparklab_yam drivers (default)
              sim         the Isaac twin, via sparklab_sim.policy_server
 
   --policy   finetuned   local fine-tune at $FINETUNED_PATH (default)
@@ -54,13 +53,13 @@ usage: rollout.sh [--robot=hw|sim] [--policy=finetuned|stock|stock-typed]
                          network on the first run so it can download.
 
   --mode     base        autonomous rollout (default)
-             dagger      human-in-the-loop correction capture; hw only, needs
-                         the relay up for Quest takeover
-             live        control port for retargeting mid-run, driven from
-                         `sparklab-rollout-ctl` or harness.sh
+             dagger      human-in-the-loop correction capture; hw only, Quest
+                         takeover through the bridge
+             live        /rollout/* ROS channel for retargeting mid-run, driven
+                         from `ros2 topic pub` / `ros2 service call` or harness.sh
 
-env: FINETUNED_PATH STOCK_REPO FOXGLOVE_PORT CONTROL_PORT DAGGER_REPO_ID
-     ROLLOUT_SKIP_PREFLIGHT=1  skip the "is it listening" checks
+env: FINETUNED_PATH STOCK_REPO FOXGLOVE_PORT DAGGER_REPO_ID PUBLISH_EVERY
+     ROLLOUT_SKIP_PREFLIGHT=1  skip the "is it up" checks
 EOF
 }
 
@@ -93,7 +92,7 @@ case "$ROBOT"  in hw|sim) ;;                      *) die "unknown --robot=$ROBOT
 case "$POLICY" in finetuned|stock|stock-typed) ;; *) die "unknown --policy=$POLICY (finetuned|stock|stock-typed)" ;; esac
 case "$MODE"   in base|dagger|live) ;;            *) die "unknown --mode=$MODE (base|dagger|live)" ;; esac
 
-# dagger needs a human taking over through the Quest relay onto real arms.
+# dagger needs a human taking over through the Quest bridge onto real arms.
 if [ "$MODE" = dagger ] && [ "$ROBOT" != hw ]; then
     die "--mode=dagger requires --robot=hw"
 fi
@@ -113,6 +112,25 @@ port_open() {
     else
         (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3<&- 3>&-
     fi
+}
+
+# require_topics <topic>[,<topic>...] <what> <how-to-start>
+require_topics() {
+    if [ "${ROLLOUT_SKIP_PREFLIGHT:-0}" = "1" ]; then return 0; fi
+    command -v ros2 >/dev/null || die "ros2 not found — source install/setup.bash"
+    local topics="$1" what="$2" how="$3" listed missing=()
+    listed=$(ros2 topic list 2>/dev/null)
+    local IFS=','
+    for t in $topics; do grep -qx "$t" <<<"$listed" || missing+=("$t"); done
+    unset IFS
+    if [ ${#missing[@]} -eq 0 ]; then
+        printf '[preflight] %-14s ... OK\n' "$what" >&2
+        return 0
+    fi
+    printf '[preflight] %-14s ... MISSING %s\n' "$what" "${missing[*]}" >&2
+    printf '            start it with: %s\n' "$how" >&2
+    printf '            (ROLLOUT_SKIP_PREFLIGHT=1 to bypass)\n' >&2
+    exit 1
 }
 
 # require_port <port>[,<port>...] <what> <how-to-start>
@@ -137,29 +155,21 @@ ROBOT_ARGS=()
 PIN=()
 
 if [ "$ROBOT" = hw ]; then
-    require_port "11333,11334" "arm servers" "./scripts/start_arm_servers.sh"
+    require_topics "/left/joint_states,/right/joint_states" "rig" \
+        "ros2 launch sparklab_yam yam.launch.py"
     if [ "$MODE" = dagger ]; then
-        require_port "8443" "relay" \
-            "sparklab-relay --host 0.0.0.0 --ssl-keyfile certs/key.pem --ssl-certfile certs/cert.pem"
+        require_topics "/quest/right/pose" "quest bridge" "ros2 launch sparklab_yam yam.launch.py"
     fi
 
-    ROBOT_ARGS=(
-        --robot.type=yam_ultra_bimanual
-        --robot.left_channel=can_left
-        --robot.right_channel=can_right
-    )
+    ROBOT_ARGS=( --robot.type=yam_ultra_bimanual )
 
     cat >&2 <<'EOF'
-[hw] The arm servers own the CAN loop and the torque. Do not run teleop_demo.sh
-     alongside them — that is two control loops on the same motors.
-[hw] Auto-recovery is a SERVER flag (arm_server --enable-auto-recovery), not a
-     --robot.* one. Leaving it off is the better default: it re-asserts the
-     pre-error target at full gains from inside i2rt's driver, which the
-     follower's velocity clamp cannot bound.
+[hw] The drivers own the CAN loop and the torque. Do not bring the rig up with
+     teleop:=true alongside a rollout — that is two control loops on the arms.
 EOF
 
     # huggingface_hub still makes a network round trip per file to check etags
-    # against the cache, which starves the CAN polling threads after connect().
+    # against the cache, mid-run; offline skips it.
     export HF_HUB_OFFLINE=1
 
     # CPU pin, off by default: it starved the loop it was meant to protect —
@@ -228,7 +238,6 @@ if [ "$MODE" = dagger ]; then
         --strategy.record_autonomous="${DAGGER_RECORD_AUTONOMOUS:-false}"
         --strategy.num_episodes="${DAGGER_EPISODES:-20}"
         --teleop.type=bi_quest_teleop
-        --teleop.ws_url="${RELAY_WS_URL:-wss://127.0.0.1:8443/ws}"
         # A new repo_id: DAgger tags every frame with an `intervention` bool
         # that put-box's schema lacks, so it cannot be appended to.
         --dataset.repo_id="${DAGGER_REPO_ID:-minhphd/put-box-dagger}"
@@ -245,19 +254,16 @@ fi
 
 # --- runner -----------------------------------------------------------------
 if [ "$MODE" = live ]; then
-    # Wraps the rollout in the control server harness.sh and rollout-ctl attach
-    # to. `python -m` so a stale editable install cannot break the rollout.
-    export PYTHONPATH="${PWD}/src:${PYTHONPATH:-}"
+    # Wraps the rollout in the /rollout/* channel harness.sh drives.
     export HF_HUB_OFFLINE=1
-    CMD=( "${PIN[@]}" python -m lerobot_robot_sparklab.rollout.live
-          --control-port "$CONTROL_PORT"
+    CMD=( "${PIN[@]}" ros2 run lerobot_robot_sparklab rollout
           --publish-every "${PUBLISH_EVERY:-5}" )
     # Sim-tuned. On hardware, leave LeRobot's defaults and pass --fps through.
     if [ "$ROBOT" = sim ]; then
         CMD+=( --interpolation_multiplier 2 --fps 20 )
     fi
-    printf '[live] control port %s — attach ./scripts/harness.sh, or a REPL\n' "$CONTROL_PORT" >&2
-    printf '[live] with: sparklab-rollout-ctl\n' >&2
+    printf '[live] /rollout/* comes up after the model loads — attach ./scripts/harness.sh,\n' >&2
+    printf '[live] or e.g. ros2 service call /rollout/reset std_srvs/srv/Trigger\n' >&2
 else
     CMD=( "${PIN[@]}" lerobot-rollout )
 fi

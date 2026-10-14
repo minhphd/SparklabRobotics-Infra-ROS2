@@ -1,7 +1,7 @@
 """Sim cameras matching the real rig's resolution and field of view.
 
-Reads ``robots/yam_ultra/config/{cameras,intrinsics}.yaml``, the same files the
-relay and the recording follower use. FOV is derived from the measured ``fx``.
+Reads ``sparklab_yam/config/{cameras,intrinsics}.yaml``, the same files the
+camera node and the follower use. FOV is derived from the measured ``fx``.
 
 The wrist camera POSES are guesses: they ride each arm's link6, but that mount
 transform is an un-done hand-eye calibration and the URDF has no camera links.

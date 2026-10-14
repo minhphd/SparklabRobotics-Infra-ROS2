@@ -1,0 +1,15 @@
+# Hand-eye calibration results, published as static TF by launch/yam.launch.py.
+# translation in m, rotation as quaternion x, y, z, w; frames are the camera ids (optical).
+transforms:
+  # calibration_top_left.yaml x inverse(calibration_top_right.yaml), 2026-10-14
+  - {parent: left_base, child: right_base,
+     translation: [0.0196, -0.5478, 0.0080], rotation: [-0.013357, -0.003291, 0.026370, 0.999558]}
+  # calibration_top_left.yaml, 2026-10-14: views agree to 2.7 mm
+  - {parent: left_base, child: top,
+     translation: [0.0518, -0.2661, 0.9148], rotation: [-0.700893, 0.695806, -0.116268, 0.105284]}
+  # calibration_left_wrist.yaml, 2026-10-14: 2.7 mm, 0.31 deg
+  - {parent: left_tool0, child: left_wrist,
+     translation: [-0.0692, 0.0041, -0.0583], rotation: [-0.158506, 0.158647, -0.707113, 0.670596]}
+  # calibration_right_wrist.yaml, 2026-10-14: 2.6 mm, 0.27 deg
+  - {parent: right_tool0, child: right_wrist,
+     translation: [-0.0707, 0.0032, -0.0598], rotation: [-0.153026, 0.154807, -0.700396, 0.679752]}

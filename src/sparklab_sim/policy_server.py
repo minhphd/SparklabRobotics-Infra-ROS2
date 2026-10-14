@@ -10,7 +10,7 @@ in exactly the schema LeRobot records:
     GET  /health                                              -> readiness + shape
 
 The matching LeRobot side is ``--robot.type=yam_ultra_sim`` (see
-``robots/yam_ultra/sim_follower.py``), so a policy rollout against this needs
+``lerobot_robot_sparklab/sim_follower.py``), so a policy rollout against this needs
 no policy changes at all -- same CLI, same observation keys, same units.
 
 /step is one round trip on purpose: a control tick is act-then-observe, and

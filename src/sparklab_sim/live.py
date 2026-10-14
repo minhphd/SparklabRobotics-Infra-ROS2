@@ -139,7 +139,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scene", default=None,
-                    help="scene .usda (default: robots/yam_ultra/sim/scene.usda)")
+                    help="scene .usda (default: sparklab_yam/sim/scene.usda)")
     ap.add_argument("--port", type=int, default=8081)
     ap.add_argument("--host", default="127.0.0.1",
                     help="0.0.0.0 to reach it from another machine directly")

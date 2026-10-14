@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lerobot_robot_sparklab</name>
+  <version>0.2.0</version>
+  <description>LeRobot plugin: the YAM-Ultra Robot and Quest Teleoperator over ROS 2, plus recording, live rollout and the agent harness.</description>
+  <maintainer email="phdminh01@gmail.com">SparkLab</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sparklab_yam</exec_depend>
+  <exec_depend>sparklab_quest</exec_depend>
+  <!-- pip, no rosdep key: lerobot, fastapi, uvicorn, opencv -->
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

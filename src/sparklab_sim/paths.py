@@ -1,7 +1,6 @@
-"""Locate shared assets in the sibling package by path, never by import.
+"""Locate shared assets in the sparklab_yam source tree by path, never by import.
 
-``lerobot_robot_sparklab`` imports lerobot at package-import time, which does
-not exist under Isaac's bundled Python. See DESIGN.md.
+Isaac's bundled Python has neither rclpy nor lerobot. See DESIGN.md.
 """
 
 from __future__ import annotations
@@ -11,9 +10,9 @@ from pathlib import Path
 # src/sparklab_sim/paths.py -> src/
 _SRC = Path(__file__).resolve().parent.parent
 
-YAM_ULTRA_MODEL_DIR = _SRC / "lerobot_robot_sparklab" / "robots" / "yam_ultra" / "model"
+YAM_ULTRA_MODEL_DIR = _SRC / "sparklab_yam" / "sparklab_yam" / "model"
 YAM_ULTRA_URDF = YAM_ULTRA_MODEL_DIR / "yam_ultra.urdf"
-YAM_ULTRA_CONFIG_DIR = _SRC / "lerobot_robot_sparklab" / "robots" / "yam_ultra" / "config"
+YAM_ULTRA_CONFIG_DIR = _SRC / "sparklab_yam" / "config"
 
 # Beside the source model rather than a temp dir: conversion is slow and
 # deterministic, so it should survive across runs. Gitignored build artifact.

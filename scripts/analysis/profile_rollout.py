@@ -199,7 +199,7 @@ def main() -> int:
         Not optional, and not only about tidiness. Without it:
 
         * the arms are left holding whatever pose the last action commanded,
-          instead of parked at zero. They do not drop (the arm_servers own the
+          instead of parked at zero. They do not drop (the drivers own the
           torque and outlive this process), but that is not the documented safe
           state and the next run starts from somewhere arbitrary.
         * ``cam.disconnect()`` never runs, so librealsense's C++ capture threads

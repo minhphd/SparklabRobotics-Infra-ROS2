@@ -26,6 +26,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 build/
+install/
+log/
 dist/
 .venv/
 venv/
@@ -60,5 +62,5 @@ Thumbs.db
 # without them. Move to git-lfs if they start churning.
 
 # Build artifact from sparklab_sim.convert, derived from the vendored URDF.
-src/lerobot_robot_sparklab/robots/yam_ultra/model/usd/
+src/sparklab_yam/sparklab_yam/model/usd/
 hf_dataset/

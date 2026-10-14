@@ -1,0 +1,9 @@
+# Camera rig for the bimanual YAM-Ultra; keys and ids are described in README.md.
+# Read by the camera node, the Quest bridge and the LeRobot follower.
+cameras:
+  left_wrist:  { serial: "353322271147", model: D405, width: 640, height: 480, crop_height: 480, advanced_json: hand_default.json }
+  right_wrist: { serial: "323622272781", model: D405, width: 640, height: 480, crop_height: 480, advanced_json: hand_default.json }
+  # fps 15 is the D435's 720p cap on the current USB2 link; frames repeat ~2x
+  # in a 30 fps dataset. Restore 30 (and drop the key) once the link is USB3.
+  top:         { serial: "243322071190", model: D435, width: 1280, height: 720, fps: 15, advanced_json: thirdperson_default.json }
+  # top:         { serial: "243322071190", model: D435, width: 640, height: 360, advanced_json: thirdperson_default.json }

@@ -1,0 +1,45 @@
+# Parameters for the YAM-Ultra nodes, loaded by launch/yam.launch.py.
+/**/yam_driver:
+  ros__parameters:
+    rate_hz: 100.0
+    max_step: [0.133, 0.133, 0.133, 0.15, 0.15, 0.15]  # rad per command
+    park_duration_s: 5.0
+    park_on_exit: true
+    enable_auto_recovery: false
+    # Our gripper's mass in kg, as tuned in Raiden; i2rt's stock LINEAR_4310 is 0.553.
+    ee_mass: 0.953
+    # Scale on the modelled gravity torque per arm joint, while holding position.
+    # i2rt's YAM-Ultra default is [1.0, 1.1, 1.1, 1.2, 1.0, 1.0].
+    gravity_comp_factor: [1.0, 1.1, 1.1, 1.3, 1.1, 1.0]
+    # The same while floating in zero gravity: 1.0 holds exactly the arm's weight.
+    # Raise a little if the arm sinks, lower it if it drifts up.
+    zero_gravity_comp_factor: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+/left/yam_driver:
+  ros__parameters:
+    channel: can_left
+
+/right/yam_driver:
+  ros__parameters:
+    channel: can_right
+
+/yam_teleop:
+  ros__parameters:
+    hands: [left, right]
+    rate_hz: 100.0
+    max_dq_pos: 0.04   # rad/tick, joints 1-3
+    max_dq_rot: 0.15   # rad/tick, joints 4-6; keep <= the driver's max_step
+    scale_translation: 0.8
+    scale_rotation: 0.8
+    rest_ramp_s: 4.0
+    home_ramp_s: 5.0
+    home_on_exit: true
+
+/calibration:
+  ros__parameters:
+    # The lab's ChArUco board: 24 squares across, 17 down, 204 markers.
+    squares_x: 24
+    squares_y: 17
+    square_length: 0.015  # m
+    marker_length: 0.011  # m
+    dictionary: DICT_5X5_250
