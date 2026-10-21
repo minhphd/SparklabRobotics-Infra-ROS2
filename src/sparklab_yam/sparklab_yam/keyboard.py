@@ -73,7 +73,8 @@ class Keyboard(Node):
         if measured is None:
             return f"no /{self.arm}/joint_states — is the driver running?"
         if key in ("z", "x"):
-            self._gripper_pubs[self.arm].publish(Float64(data=0.0 if key == "z" else 1.0))
+            # The driver's gripper is 1 open, 0 closed.
+            self._gripper_pubs[self.arm].publish(Float64(data=1.0 if key == "z" else 0.0))
             return f"{self.arm} gripper {'open' if key == 'z' else 'close'}"
         target = self.target.get(self.arm)
         paused = time.monotonic() - self._last_press > BURST_S

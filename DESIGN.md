@@ -137,9 +137,11 @@ ramp anywhere.
 **Zero gravity follows Raiden's tested recipe**, after i2rt's own mode let the
 arm fall: arm kp to 0 with kd kept (a released arm can't run away), the
 gripper's gains untouched, and the gravity factor at 1.0 while floating. The
-real culprit was mass: our gripper weighs 0.953 kg (Raiden's `arms.json`), but
+real culprit was mass: the long gripper weighed 0.953 kg (Raiden's `arms.json`), but
 i2rt models the stock 0.553 kg one. The holding factors stay separate, since
-they also cancel friction and tracking error under kp.
+they also cancel friction and tracking error under kp. With the stock gripper back
+(see [cap-x on the rig](#cap-x-on-the-rig)), the drivers use i2rt's
+mass and factors again.
 
 **The left arm's joint 4 zero was 5–7° off.** Hand-eye calibration stalled at
 7.5 mm / 1.6° with a 0.2–0.3 px board fit, so the camera was fine; a fitted
@@ -232,6 +234,49 @@ so a reload bounces it to reset physics-owned objects.
 **Not Isaac's WebRTC stream**: it has no browser client here, needs extra ports,
 and uses UDP, which SSH tunnels can't carry. The MJPEG view is one TCP port.
 
+**The digital twin speaks ROS.** The policy server stays on HTTP because Isaac's
+Python can't load the workspace's rclpy. Isaac 5.1's ROS 2 bridge ships its own
+Humble rclpy for Python 3.11, though, and it talks DDS to sparklab-ros like any other
+node. So `twin.py` serves the drivers', camera node's and launch's topics itself, and
+cap-x and VLM_TAMP run on the twin with nothing changed but `ROS_DOMAIN_ID`. Its world
+frame is `left_base`, the frame every client already works in. The stage is built from
+the calibration files every launch, never hand-edited, so it can't drift from them.
+
+**Checked against the real cameras.** Forward-kinematics points projected through the
+calibration land on the same gripper features in real and twin frames, and the twin's
+`tool0` equals the driver's FK to 0.1 mm (`test_twin.py`). `intrinsics.yaml` had been
+exported at the D4xx's default 848x480 and rescaled by width, which is wrong for the
+D405: its 640x480 mode is a different crop (fx 392, against 327 rescaled). It now holds
+the lens at the captured resolution.
+
+**The finger direction was backwards.** The twin rendered "open" fingers meeting in the
+middle. In the URDF a finger joint at 0 is closed, with the tips touching, and −0.04695
+is open, 9.4 cm apart. cap-x had it the other way round. cuRobo's model locked the
+fingers "open" at 0, so it planned with closed fingers, and the Foxglove view and the
+GraspGenX collision mesh drew the hand inverted. All three are fixed. With the wider
+hand modelled, the handover giver can't back out 8 cm from the meeting pose, so it backs
+out 5 cm.
+
+**Looks fitted, not guessed.** Colours are the sRGB the real top camera records. The
+ambient, ceiling and window light levels were fitted with Nelder-Mead against six table
+regions of a real frame, to 12/255 mean error, with auto-exposure off so the levels
+mean what they did when fitted. The real table is markedly brighter on the right arm's
+side, hence the window. The stock fingers take the gripper body's grey until they
+are sampled from a frame.
+
+**The twin's joints are the real motors'.** Force drives with i2rt's kp and kd
+(`yam_ultra.yml`), against no link gravity, stand in for the drivers' gravity-
+compensated PD, so a payload sags as on the rig. The importer's acceleration drives
+had scaled with link mass: the wrists held a 0.35 kg can at about 1.5 N m/rad
+instead of 10. The URDF's `effort="1"` had capped every drive at 1 N; the caps are
+now the DM4340s' and DM4310s' peak torques. The real fingers share one motor through
+a rack. Two drives that saturate let a gripped object float between them, and a
+PhysX mimic joint coupling them pushed 1.5 N m into the wrist pitch whenever they
+squeezed something: joint 5 sat 0.15 rad off, and every carry tripped the lag guard,
+which the real arm never did. So each finger has its own drive, capped above
+anything its stiffness asks: unsaturated, the two centre a held object. Props weigh
+their BEHAVIOR category's average, not the files' 1 kg.
+
 ## Rollout control
 
 - **A new task clears the queue.** The policy plans 30 steps at a time; without
@@ -253,6 +298,139 @@ the robot keeps doing its last task. An agent can only set a task or say it's
 done — it can't park or stop the robot, so a confused agent picks a wrong step
 rather than doing something drastic. A generation counter drops any decision
 that was in flight when you pressed stop.
+
+## cap-x on the rig
+
+**One process, two environments.** cap-x needs CUDA torch, cuRobo and GraspGenX
+from its own venv; ROS 2 only installs into the conda env. Both are CPython 3.12,
+so `scripts/capx_python.sh` runs the conda interpreter isolated, cap-x's
+site-packages first and ROS 2's after. rclpy, messages with numpy fields and tf2
+all work next to cap-x's numpy 1.26: extensions built against numpy 2 target the
+1.x API by default. The alternative, a bridge server between two processes, would
+have brought back the `arm_server` the migration removed.
+
+**The robot model is generated, not hand-written.** `capx_sparklab.robot.build`
+starts from sparklab_yam's URDF, i2rt's stock gripper included, and adds the
+planning frames; the collision spheres and GraspGenX's collision mesh are fitted
+from it, so a change of hand is a rebuild. The
+planners' tool frame is the gripper base (`grasp_base`), not `tool0`: GraspGenX
+returns gripper-base poses, as it does `panda_hand` for the Franka. Both arms plan
+in `left_base`; each arm's URDF gets a world joint set from the calibration.
+
+**Collision at park.** The arms rest folded, so every plan starts there. cuRobo's
+fitted spheres made park look like a collision twice over: the base's hung 3 cm
+below its mounting face into the table (now clipped at the face), and folded
+links overlap by a few millimetres as spheres, a different pair on each build.
+The same happens fingers-down: one fit left link3 and link5 overlapping there, and
+no fingers-down pose planned. So every pair whose spheres overlap at a pose the real
+arm reaches without touching itself (parked, and fingers-down 0.3 m over the table)
+is left out of self-collision, and the build prints which.
+
+**Wrist images are undistorted in `YamEnv`.** cap-x deprojects depth as a pinhole
+camera; the D405s have k1 ≈ -0.05, a few pixels at the edges.
+
+**Handover geometry was measured on the model, not chosen.** The YAM wrist rolls
+about ±120°, which rules out a lot:
+
+- Fingers straight down must be the pitch-down of the parked orientation; the
+  same direction rolled half a turn is out of reach.
+- Presented fingers-down, an object held near one end hangs to table height at
+  any height the arm reaches, so the giver holds it level instead.
+- Level, the giver cannot point straight at the other arm or straight ahead;
+  30–60° round from forward works from 0.20 m up.
+- Of those, only 60° at 0.30 m in front of the bases' midpoint leaves the receiver
+  a plannable level grasp: at 30°, or 0.22 m out, it has none.
+
+**Worked around in cap-x, not fixed there** (the checkout belongs to another
+account): its `move_relative` binds `quat_wxyz` to an array and then calls it, so
+every successful move raised after moving — `YamSparkLabApi` carries a corrected
+copy; LIBERO asks on stdin for a dataset folder the first time an account imports
+it, which hung runs silently — the launcher writes its default config; cap-x's
+model client loads the checkout's `.env` on import — the tests turn that off; and
+`Voice` loads a TTS model and needs an audio device — lines are printed instead.
+
+**cap-x lives next to the repo, in this account.** The checkout and its venv were
+copied from the account that set them up, and the venv's editable-install paths
+rewritten, so nothing here reaches into another user's home.
+
+**The scene goes to Foxglove, not viser.** One viewer for the rig: `RosScene`
+answers cap-x's drawing calls with ROS topics and publishes both arms' links on TF.
+`YamEnv`'s ROS thread logs a failing callback and keeps spinning: a drawing bug
+once froze the joint states every motion check reads.
+
+**Three rig facts learnt the hard way.** The drivers' gripper is 1 open, 0 closed;
+read the other way round, `open_gripper` closed it. cuRobo's fusion takes one
+resolution for every camera, while the top camera is 1280x720 and the wrists
+640x480, so frames are resampled to 640x480, intrinsics scaled, before fusing.
+And fusion fixes its camera count on the first refresh, while the newest colour
+frame lacks its depth on 11-16% of reads per camera (measured live), so a camera
+that skipped one refresh failed every later one ("Expected num_cameras=2"). The
+env keeps three colour frames as well as three depth, and pairs the newest match.
+
+**The gripper has a GraspGenX collision mesh.** cap-x screens candidates against
+the scene with the gripper's `coll_mesh.obj` before keeping the top 20, and skips
+the screen when the mesh is missing. Without it, a marker lying flat got 20 side
+grasps through the table and none planned. `build.py` now writes the open hand's
+hulls. Offline, with a marker in reach: 12 of 20 planned without the mesh, 19 with.
+
+**Top-down reach is about 0.45 m.** With the stock gripper, a grasp from above on
+the table (10 cm standoff and lift) plans out to 0.46 m straight ahead of the arm's
+base and 0.44 m at 15 cm across, and as close as 0.12 m. The grasp centre gets no
+higher than 0.12 m at 25–30 cm out, 0.10 m at 36 cm and 0.07 m at 42 cm. With the
+14.5 cm fingers it was 0.25 to 0.43 m. The prompt had once said 0.55 m, and the
+agent retried a marker at 0.56 m for dozens of turns.
+
+**Grasps stop at 0.35 m: the shoulder's rating, not the planner's reach.** With the
+stock gripper the agent took a grasp 0.48 m out. Through the grasp and lift, joint 2
+read 14–16 N m on the rig, and the arm whined. A DM4340 is rated 9 N m continuous
+(27 N m peak), and the agent holds each pose for a model's turn, some 30 s. i2rt's
+gravity model, which the driver uses, predicted 13.7 N m there against the 14.4
+measured. Fingers down at the table, it puts joint 2 at 7.0 N m 0.28 m out, 8.4 at
+0.32, 9.7 at 0.36 and 11.0 at 0.40; a 10 cm lift takes off about 0.5. So capx's
+`get_grasp_poses` refuses objects past 0.35 m, and TAMP's `pick` does the same.
+
+**Plans play at half speed.** cuRobo times plans at up to 0.9 rad/s per joint, the
+URDF's 1 rad/s. Played in real time, the right shoulder with the 0.95 kg gripper
+trailed `home` by 0.16 rad, and `YamEnv`'s 0.15 rad lag guard stopped it; the
+driver's 0.133 rad `max_step` clamp fired at the same moment. The robot config's
+`velocity_scale` lowered the limit cuRobo reports, but not the trajectory: still
+81 waypoints at 0.8 rad/s. So `_execute` resamples each plan to twice the
+waypoints and streams them at the same 40 Hz.
+
+**Grasps are confirmed by eye.** cap-x's `close_gripper` reports `grasped` from
+the closed width, and `handover` reopened the receiver on the same test. The rig's
+fingers are soft with no tactile sensing, so the width does not separate an object
+from nothing. Both checks are gone: `close_gripper` tells the agent to look with
+`view_cameras`, before attaching and again after a short lift. Looking comes after
+closing because the unattached object's cloud surrounds the gripper, and nothing
+plans until it is attached.
+
+**Back to the stock gripper.** The rig ran SparkLab's long gripper for a while: TPU
+fin-rays from [YAM-iPhUMI](https://github.com/sparklabutah/YAM-iPhUMI) on the stock
+sliders, 14.5 cm base to tip against 8 cm, and 0.953 kg against 0.553. What it cost,
+measured in the twin and on the rig on 2026-10-15: reach from above ended at 0.43 m
+and about 10 cm-tall objects; the wrists, at kp 10, carried 0.4 kg more on a longer
+lever; the fitted fingertip spheres reached 1 cm past the tips, which trapped a low
+marker grasp; the fingers filled the wrist views, whose ray-shadows fuse as phantom
+surfaces; and the 4 cm-wide fingers left little of a held object for a handover. The
+fin-rays' compliance did not outweigh that for planning work, so the rig went back
+to i2rt's LINEAR_4310 on the same camera mounts.
+
+**A grasp is left by the lift planned with it.** On the rig, a GraspGenX grasp on a
+1.9 cm marker put the fingertips at z ≈ −0.012. The fitted fingertip spheres
+reached −0.022, 1.2 cm into the planner's table, whose top deliberately errs high
+at −0.010. cap-x plans the final descent with the fingers exempt, so the grasp was
+reached. From that start, though, every later motion is in collision: the
+`move_relative` lift, the pregrasp and `home` all failed, and the arm was stuck.
+cap-x does plan a 10 cm lift with the same exemption, to prove the grasp can be
+left, but then discards it. `lift` plays that lift. The twin reproduced the
+failure and the fix: the marker rose 10 cm, and `home` then planned. Closing on
+an object pinned to the table deflects the wrist about 0.05 rad. So `lift`
+accepts any start within the lag guard's 0.15 rad of the plan's first waypoint.
+
+**Tests without cap-x are not imported at all.** ROS's launch_testing pytest
+plugin imports every test module; a module-level `importorskip` inside it skips
+the whole session, every package's tests. `conftest.py` leaves them out instead.
 
 ## Two rules plugin discovery depends on
 

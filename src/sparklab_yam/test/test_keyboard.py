@@ -45,11 +45,13 @@ def _settle(keyboard, *keys):
 
 def test_keys_jog_joints_within_limits_and_drive_the_gripper(rig):
     keyboard, _, states = rig
-    _settle(keyboard, "q", "q", "q", "f", "s", "x")
+    _settle(keyboard, "q", "q", "q", "f", "s", "z")
     q = states[-1].position
     # Joint 2 starts on its lower limit (0), so "s" stays there.
     assert list(q[:6]) == pytest.approx([0.06, 0.0, 0.0, -0.02, 0.0, 0.0], abs=1e-6)
-    assert q[6] == pytest.approx(1.0)
+    assert q[6] == pytest.approx(1.0)  # z opens: the driver's gripper is 1 open
+    _settle(keyboard, "x")
+    assert states[-1].position[6] == pytest.approx(0.0)
 
 
 def test_space_switches_arm(rig):

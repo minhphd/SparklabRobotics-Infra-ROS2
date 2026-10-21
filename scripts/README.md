@@ -11,7 +11,8 @@ active and the workspace sourced (`source install/setup.bash`).
 | `harness.sh` | web page + AI agent in front of a running policy |
 | `make_certs.sh` | make the HTTPS certificate the headset needs |
 | `can_health.sh` | check the CAN bus when an arm stops responding |
-| `isaac_python.sh` | run something with Isaac Sim's Python |
+| `isaac_python.sh` | run something with Isaac Sim 5.1's Python (the `behavior` env) and its bundled ROS 2 |
+| `capx_python.sh` | run something with cap-x's GPU stack and ROS 2 in one Python ([capx_sparklab](../src/capx_sparklab/README.md)) |
 | `install_isaac_kernel.sh`, `start_isaac_jupyter.sh` | Isaac notebooks in VS Code |
 | `analysis/*.py` | tools for figuring out why a policy misbehaves |
 

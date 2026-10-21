@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
-# Run something under Isaac Sim's bundled Python, with this repo importable.
+# Run Python inside Isaac Sim 5.1, with this repo's src/ and Isaac's bundled ROS 2 Humble.
 #
-# There is no conda environment for sim work: Isaac ships its own Python 3.12
-# and cannot be installed into one. This clears any active conda env, puts
-# <repo>/src on PYTHONPATH, and hands off.
+#   ./scripts/isaac_python.sh -m sparklab_sim.twin              # the digital twin
+#   ./scripts/isaac_python.sh -m sparklab_sim.convert --twin    # robot USD, once
 #
-#   ./scripts/isaac_python.sh -m sparklab_sim.convert    # module
-#   ./scripts/isaac_python.sh my_script.py               # script
-#   ./scripts/isaac_python.sh                            # REPL
-#
-# Override the install with ISAAC=/path/to/isaac-sim-standalone-...
+# Isaac is the pip install in the conda env ISAAC_ENV (default: behavior, which
+# also holds OmniGibson). Its rclpy talks DDS to sparklab-ros on the same domain.
 
 set -euo pipefail
 
-ISAAC="${ISAAC:-$HOME/Downloads/isaac-sim-standalone-6.0.0-linux-x86_64}"
+ISAAC_ENV="${ISAAC_ENV:-$HOME/.conda/envs/behavior}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROS2="$ISAAC_ENV/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble"
 
-[[ -x "$ISAAC/python.sh" ]] || {
-    echo "ERROR: no python.sh under $ISAAC" >&2
-    echo "Set ISAAC=/path/to/isaac-sim-standalone-... and retry." >&2
+[[ -x "$ISAAC_ENV/bin/python" && -d "$ROS2" ]] || {
+    echo "ERROR: no Isaac Sim with its ROS 2 bridge in $ISAAC_ENV — set ISAAC_ENV." >&2
     exit 1
 }
 
-# A conda env's LD_LIBRARY_PATH and site-packages can shadow Isaac's and fail
-# far from the cause, e.g. "SRE module mismatch" from a mismatched stdlib.
-if [[ -n "${CONDA_PREFIX:-}" ]]; then
-    # shellcheck disable=SC1091
-    source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null || true
-    while [[ -n "${CONDA_PREFIX:-}" ]]; do conda deactivate || break; done
-fi
-
-export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
-exec "$ISAAC/python.sh" "$@"
+# A sourced ROS workspace or conda env would put a second, mismatched ROS on these paths.
+export LD_LIBRARY_PATH="$ROS2/lib"
+export PYTHONPATH="$REPO/src:$ROS2/rclpy"
+export ROS_DISTRO=humble RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export OMNI_KIT_ACCEPT_EULA=YES
+exec "$ISAAC_ENV/bin/python" "$@"

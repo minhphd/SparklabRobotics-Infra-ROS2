@@ -64,10 +64,12 @@ Only one thing drives the arms at a time: the teleop node *or* a LeRobot process
 | [`src/sparklab_quest`](src/sparklab_quest/README.md) | the headset: bridge node, web page, controller input | `bridge.py` |
 | [`src/sparklab_cameras`](src/sparklab_cameras/README.md) | the cameras: publisher node and setup tools | `node.py` |
 | [`src/lerobot_robot_sparklab`](src/lerobot_robot_sparklab/README.md) | LeRobot plugin: robot, teleoperator, recording, live rollout, harness | `follower.py` |
-| [`src/sparklab_sim`](src/sparklab_sim/README.md) | Isaac Sim digital twin — not ROS, runs on Isaac's own Python | `policy_server.py` |
+| [`src/capx_sparklab`](src/capx_sparklab/README.md) | cap-x's agent tools on both arms: an LLM writes Python against perceive / grasp / move / hand-over tools | `api.py`, `env.py` |
+| [`src/sparklab_sim`](src/sparklab_sim/README.md) | Isaac Sim digital twin: the rig's ROS 2 interface on its own domain, from Isaac's own Python | `twin.py`, `policy_server.py` |
 | [`scripts/`](scripts/README.md) | everyday commands and policy-debugging tools | `rollout.sh` |
 
-The first four are ROS 2 packages, built together with `colcon`.
+The first five are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
+under [`scripts/capx_python.sh`](scripts/capx_python.sh), next to cap-x's GPU stack.
 
 ## Topics
 
@@ -78,7 +80,7 @@ The first four are ROS 2 packages, built together with `colcon`.
 | `/<arm>/joint_states` | `JointState` | measured joints 1–6 + gripper, 100 Hz |
 | `/<arm>/ee_pose` | `PoseStamped` | gripper pose in the arm's base frame |
 | `/<arm>/arm/command` | `Float64MultiArray` | 6 joint targets (rad) |
-| `/<arm>/gripper/command` | `Float64` | gripper target, 0..1 |
+| `/<arm>/gripper/command` | `Float64` | gripper target, 0 closed .. 1 open |
 | `/quest/head/pose`, `/quest/<arm>/pose` | `PoseStamped` | headset and controller poses |
 | `/quest/<arm>/joy` | `Joy` | controller buttons and trigger |
 | `/quest/<arm>/haptic`, `/quest/<arm>/engaged` | `Float32`, `Bool` | feedback shown on the headset |
@@ -178,6 +180,7 @@ headset, open the URL the bridge prints (`https://<this-machine>:8443/`).
 | run a policy | `./scripts/rollout.sh` |
 | change the policy's task while it runs | `./scripts/rollout.sh --mode=live`, then `ros2 topic pub --once /rollout/task std_msgs/msg/String "{data: 'pick up the scissors'}"` |
 | put an AI agent in charge of the task | `./scripts/rollout.sh --mode=live`, then `./scripts/harness.sh` |
+| let an LLM drive both arms by writing code (cap-x) | see [`src/capx_sparklab`](src/capx_sparklab/README.md#running-a-session) |
 | run a policy in Isaac instead | see [`scripts/README.md`](scripts/README.md#run-a-policy) |
 | calibrate where a camera is | see [Calibrating a camera](#calibrating-a-camera) |
 | see what is running | [Foxglove](#seeing-whats-going-on-foxglove), or `ros2 node list`, `ros2 topic echo /left/joint_states` |
@@ -238,6 +241,9 @@ but `<arm>_tool0` is fixed and comes from
 [`config/extrinsics.yaml`](src/sparklab_yam/config/extrinsics.yaml), which the
 launch publishes on `/tf_static`. A cloud costs ~0.3 MB (wrist) or ~0.9 MB
 (top) per message; from a laptop, turn on one at a time.
+
+While a cap-x session runs, both arms' models and what its tools perceive and plan
+are published too — see [capx_sparklab](src/capx_sparklab/README.md#running-a-session).
 
 **Recording raw topics** (for debugging — datasets come from `record_manual.sh`):
 
@@ -337,10 +343,11 @@ and restart the launch. `left_base → right_base` is
 ## Tests
 
 ```bash
-colcon test --packages-select sparklab_quest sparklab_yam && colcon test-result --verbose
+colcon test --packages-select sparklab_quest sparklab_yam sparklab_cameras capx_sparklab && colcon test-result --verbose
+./scripts/capx_python.sh -m pytest src/capx_sparklab/test     # cap-x's planning, on the GPU
 ```
 
-They use a simulated arm; no hardware needed.
+They use simulated arms; no hardware needed.
 
 ## Adding a robot
 

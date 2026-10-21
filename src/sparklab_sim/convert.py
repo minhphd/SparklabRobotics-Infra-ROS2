@@ -1,72 +1,82 @@
-"""Convert the vendored YAM-Ultra URDF to USD. Run once; the result is cached.
+"""Convert the YAM-Ultra URDF to USD. Run once; the result is cached.
 
-    <isaac>/python.sh -m sparklab_sim.convert
+    ./scripts/isaac_python.sh -m sparklab_sim.convert           # stock gripper, posed only
+    ./scripts/isaac_python.sh -m sparklab_sim.convert --twin    # the twin's arm, with collisions
 
 Boots a headless SimulationApp because the URDF importer is a Kit extension,
 which is also why every Isaac import here sits inside ``main()``.
 
-The source is the vendored URDF, not i2rt's installed copy: that clone predates
-v1.2.4 and still has the swapped joint2/joint3 limits, which would give the
-twin an elbow travelling 0.66 rad past the real stop.
+The stock source is the vendored URDF, not i2rt's installed copy: that clone
+predates v1.2.4 and still has the swapped joint2/joint3 limits. The twin's
+source is capx_sparklab's ``yam.urdf``, the one cuRobo plans with.
 """
 
 from __future__ import annotations
 
 import argparse
+import xml.etree.ElementTree as ET
 
 from . import paths
+
+# cuRobo's frames in yam.urdf; the twin publishes tool0 as the driver defines it instead.
+PLANNING_FRAMES = {"world", "grasp_base", "tool0"}
+
+
+def write_twin_urdf() -> None:
+    """capx_sparklab's yam.urdf without the planning frames, with absolute mesh paths."""
+    root = ET.parse(paths.require(paths.CAPX_URDF)).getroot()
+    for link in [l for l in root.findall("link") if l.get("name") in PLANNING_FRAMES]:
+        root.remove(link)
+    for joint in root.findall("joint"):
+        if {joint.find("parent").get("link"), joint.find("child").get("link")} & PLANNING_FRAMES:
+            root.remove(joint)
+    for mesh in root.iter("mesh"):
+        mesh.set("filename", str(paths.CAPX_URDF.parent / mesh.get("filename")))
+    paths.TWIN_URDF.write_text(ET.tostring(root, encoding="unicode"))
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--force", action="store_true",
-                    help="reconvert even if the USD already exists")
-    ap.add_argument("--headless", default=True, action=argparse.BooleanOptionalAction)
+    ap.add_argument("--twin", action="store_true", help="the arm the twin simulates, with collisions")
+    ap.add_argument("--force", action="store_true", help="reconvert even if the USD already exists")
     args = ap.parse_args()
 
-    urdf = paths.require(paths.YAM_ULTRA_URDF)
-    if paths.YAM_ULTRA_USD.exists() and not args.force:
-        print(f"already converted: {paths.YAM_ULTRA_USD}\n(use --force to redo)")
+    out = paths.TWIN_USD if args.twin else paths.YAM_ULTRA_USD
+    if out.exists() and not args.force:
+        print(f"already converted: {out}\n(use --force to redo)")
         return 0
-
-    paths.USD_DIR.mkdir(parents=True, exist_ok=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.twin:
+        write_twin_urdf()
+    urdf = paths.TWIN_URDF if args.twin else paths.require(paths.YAM_ULTRA_URDF)
 
     # --- Isaac boots here; nothing omni/isaacsim may be imported above ------
     from isaacsim import SimulationApp
-    simulation_app = SimulationApp({"headless": args.headless})
-
+    app = SimulationApp({"headless": True})
     try:
-        import omni.kit.app
-        ext_manager = omni.kit.app.get_app().get_extension_manager()
-        # The importer leans on both of these; the shipped example enables
-        # them explicitly rather than relying on load order.
-        ext_manager.set_extension_enabled_immediate("omni.scene.optimizer.core", True)
-        ext_manager.set_extension_enabled_immediate("isaacsim.robot.schema", True)
+        import omni.kit.commands
+        from isaacsim.asset.importer.urdf import _urdf
 
-        from isaacsim.asset.importer.urdf.impl import URDFImporter, URDFImporterConfig
-
-        cfg = URDFImporterConfig()
-        cfg.urdf_path = str(urdf)
-        cfg.usd_path = str(paths.USD_DIR)
-        # Anchor the arm to the world: it is bolted to a table, and a
-        # floating base would sag under gravity the moment physics ran.
-        cfg.fix_base = True
-        # Merging fixed joints is a rendering optimisation that erases link
-        # frames — exactly what wrist-camera extrinsics will attach to.
-        cfg.merge_fixed_joints = False
-        # Kinematic posing only, so no drive tuning is meaningful here. Set
-        # position targets so the joints are drivable when physics is off.
-        cfg.joint_target_type = "position"
-
-        print(f"converting {urdf.name} -> {paths.USD_DIR}")
-        out = URDFImporter(cfg).import_urdf()
-        if not out:
-            print("ERROR: importer returned no output path")
-            return 1
-        print(f"wrote {out}")
+        _, config = omni.kit.commands.execute("URDFCreateImportConfig")
+        # Bolted to the table; a floating base would fall the moment physics ran.
+        config.set_fix_base(True)
+        # Merging fixed joints erases link frames, which the cameras hang from.
+        config.set_merge_fixed_joints(False)
+        config.set_make_default_prim(True)
+        config.set_create_physics_scene(False)
+        config.set_default_drive_type(_urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION)
+        # The URDF has visual meshes only; the twin needs them to collide, for grasping.
+        # Decomposed, not hulled: one hull per link would fill its concave parts.
+        config.set_collision_from_visuals(args.twin)
+        config.set_convex_decomp(args.twin)
+        config.set_self_collision(False)
+        print(f"converting {urdf.name} -> {out}", flush=True)
+        omni.kit.commands.execute("URDFParseAndImportFile", urdf_path=str(urdf),
+                                  import_config=config, dest_path=str(out))
+        print(f"wrote {out}", flush=True)
         return 0
     finally:
-        simulation_app.close()
+        app.close()
 
 
 if __name__ == "__main__":

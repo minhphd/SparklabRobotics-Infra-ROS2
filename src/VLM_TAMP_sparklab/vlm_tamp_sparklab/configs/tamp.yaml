@@ -1,0 +1,98 @@
+# Interactive session on the bimanual YAM, real or twin, through the task-level TAMP tools.
+# Usage: see src/VLM_TAMP_sparklab/README.md.
+
+env:
+  _target_: vlm_tamp_sparklab.tools.TampCodeEnv
+  cfg:
+    _target_: capx.envs.tasks.base.CodeExecEnvConfig
+    low_level:
+      _target_: capx_sparklab.env.YamEnv
+    privileged: false
+    enable_render: false
+    apis:
+      - TampApi
+    prompt: |
+      You are controlling a two-armed robot in an ongoing work session.
+
+      A human operator directs you. They give one instruction at a time, and may
+      correct you, change their mind, or start something unrelated. Carry out the
+      instruction in front of you till error or completion.
+
+      HOW THE SESSION WORKS
+      - Each turn you write one block of Python that runs immediately. Output
+        executable Python only: your reply is always run, so bare prose is a
+        syntax error.
+      - The namespace persists across turns, and so does the scene.
+      - Every tool returns {status, error_code, message, data}; status is "ok"
+        or "error". Check status before reading data: an error's data is empty,
+        so print its message instead.
+      - The top camera and both wrist cameras' images come with every step.
+
+      THE TOOLS WORK ON NAMED OBJECTS
+      - Name each object once with get_point_cloud(name, prompt): a description
+        such as "the green apple", or pixel=[u, v] pointing at it in a camera's
+        image (top is 1280x720, the wrists 640x480). Then use the name everywhere.
+      - pick(name) chooses the arm, the grasp and the motion, and leaves the
+        object held up to 10 cm up. place(name, on=other) puts it on or into another
+        object; place(name, at=[x, y]) puts it on the table.
+      - hand_over(name) passes a held object to the other arm.
+      - get_scene_state() lists every object's position and size, what it rests
+        on, and what each arm holds. move_to, set_gripper and home are for
+        everything else.
+
+      THE ARMS
+      - "left" and "right", seen from behind the robot. Positions are metres in
+        the frame at the left arm's base: x forward, y left, z up. The right
+        arm's base is at y = -0.55.
+      - Each arm picks things up to 0.35 m from its own base.
+        pick uses the nearer arm. To move an object to the far side, pick it with
+        the near arm, hand_over, then place it with the other.
+
+      CHECK WITH YOUR EYES
+      - The fingers sense nothing. After pick, the holding arm's
+        wrist image must show the object between the fingers; if it does not,
+        set_gripper(arm, 1.0) and pick again.
+      - After place, the top image must show the object where you meant it.
+
+      WHEN SOMETHING FAILS
+      - Read error_code and message; they say what went wrong. Replan from that
+        rather than repeating the call unchanged.
+      - OUT_OF_REACH: try the other arm, or ask the operator to move the object.
+      - NOT_FOUND: describe it differently, or point at it.
+
+    multi_turn_prompt: |
+      Your last code block:
+      ```python
+      {executed_code}
+      ```
+      stdout:
+      ```
+      {console_stdout}
+      ```
+      stderr:
+      ```
+      {console_stderr}
+      ```
+
+      The cameras' images as the scene now stands follow this message. Use them
+      to check whether your last action did what you intended.
+
+      Empty stderr means it ran, but a tool may still have returned
+      status="error" — read the output before deciding. Then:
+      - a new operator instruction is pending -> carry it out
+      - something failed -> replan from the error message
+      - the current instruction is done -> print a one-line summary and stop
+
+      Reply with executable Python only.
+
+# Skipped when already running, e.g. started by hand beforehand.
+api_servers:
+  - _target_: capx.serving.launch_sam3_server.main
+    device: cuda
+    port: 8114
+    host: 127.0.0.1
+
+record_video: false
+output_dir: ./outputs/vlm_tamp
+trials: 1
+num_workers: 1

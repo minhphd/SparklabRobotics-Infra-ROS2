@@ -1,3 +1,5 @@
+# Colour intrinsics at the cameras.yaml resolutions, read from the devices on 2026-10-15.
+# Depth is published aligned to colour, so it shares these.
 total_cameras: 3
 cameras:
   camera_0_323622272781:
@@ -24,22 +26,22 @@ cameras:
           - 0.0
       color:
         resolution:
-          width: 848
+          width: 640
           height: 480
         focal_length:
-          fx: 433.84075927734375
-          fy: 433.1690673828125
+          fx: 391.473
+          fy: 390.867
         principal_point:
-          ppx: 426.48785400390625
-          ppy: 242.84481811523438
+          ppx: 322.245
+          ppy: 242.567
         distortion:
           model: inverse_brown_conrady
           coefficients:
-          - -0.051134999841451645
-          - 0.06333200633525848
-          - -0.0003519742167554796
-          - 0.00045342533849179745
-          - -0.021956197917461395
+          - -0.05113
+          - 0.06333
+          - -0.00035
+          - 0.00045
+          - -0.02196
   camera_1_243322071190:
     model: RealSense D435F
     serial_number: '243322071190'
@@ -64,14 +66,14 @@ cameras:
           - 0.0
       color:
         resolution:
-          width: 640
-          height: 480
+          width: 1280
+          height: 720
         focal_length:
-          fx: 607.4273071289062
-          fy: 607.263427734375
+          fx: 911.141
+          fy: 910.895
         principal_point:
-          ppx: 323.3648376464844
-          ppy: 242.44586181640625
+          ppx: 645.047
+          ppy: 363.669
         distortion:
           model: inverse_brown_conrady
           coefficients:
@@ -104,19 +106,19 @@ cameras:
           - 0.0
       color:
         resolution:
-          width: 848
+          width: 640
           height: 480
         focal_length:
-          fx: 434.97406005859375
-          fy: 434.4390563964844
+          fx: 392.496
+          fy: 392.013
         principal_point:
-          ppx: 416.7867431640625
-          ppy: 241.59170532226562
+          ppx: 313.491
+          ppy: 241.436
         distortion:
           model: inverse_brown_conrady
           coefficients:
-          - -0.05117759853601456
-          - 0.06367470324039459
-          - -0.0008586639887653291
-          - -0.0004838009481318295
-          - -0.022017283365130424
+          - -0.05118
+          - 0.06367
+          - -0.00086
+          - -0.00048
+          - -0.02202

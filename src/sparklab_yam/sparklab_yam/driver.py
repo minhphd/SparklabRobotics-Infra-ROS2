@@ -9,7 +9,7 @@ Topics are relative to the namespace (one arm per namespace):
     ee_pose          out  geometry_msgs/PoseStamped  tool0 in <ns>_base, FK of joint_states
     /tf              out  the same pose as <ns>_base -> <ns>_tool0
     arm/command      in   std_msgs/Float64MultiArray  6 absolute joint targets (rad)
-    gripper/command  in   std_msgs/Float64  gripper target, i2rt's normalised 0..1
+    gripper/command  in   std_msgs/Float64  gripper target, i2rt's normalised 0 closed .. 1 open
     park             srv  std_srvs/Trigger  ramp everything to zero; blocks for the ramp
     zero_gravity     srv  std_srvs/SetBool  true: arm joints float under gravity compensation,
                                             damped, gripper holding, commands ignored;

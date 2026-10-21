@@ -48,7 +48,7 @@ that talks to the motors.
 | `ee_pose` | out | gripper pose (`tool0`) in the arm base frame |
 | `/tf` | out | the same pose as the transform `<arm>_base → <arm>_tool0` |
 | `arm/command` | in | 6 joint targets, rad |
-| `gripper/command` | in | gripper target, 0..1 |
+| `gripper/command` | in | gripper target, 0 closed .. 1 open |
 | `park` | service | slowly move every joint to 0 (the folded rest pose) |
 | `zero_gravity` | service (`SetBool`) | `true`: arm joints float (damped), the gripper keeps holding, commands ignored; `false`: hold where it is |
 
@@ -68,7 +68,7 @@ Parameters (in `config/yam.yaml`): `channel`, `sim`, `rate_hz`, `max_step`,
 
 | parameter | what it is |
 |---|---|
-| `ee_mass` | the gripper's mass in kg, as i2rt's gravity model sees it. Ours is 0.953 (i2rt's stock gripper is 0.553). Fix this first if both modes are off. |
+| `ee_mass` | the gripper's mass in kg, as i2rt's gravity model sees it; 0 keeps the stock LINEAR_4310's 0.553, which the rig uses. Fix this first if both modes are off, or after changing the gripper. |
 | `gravity_comp_factor` | 6 numbers, joints 1–6: scale on the modelled gravity torque while **holding position** |
 | `zero_gravity_comp_factor` | the same while **floating** in zero gravity; 1.0 holds exactly the arm's weight |
 

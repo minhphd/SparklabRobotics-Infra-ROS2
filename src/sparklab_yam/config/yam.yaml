@@ -6,11 +6,10 @@
     park_duration_s: 5.0
     park_on_exit: true
     enable_auto_recovery: false
-    # Our gripper's mass in kg, as tuned in Raiden; i2rt's stock LINEAR_4310 is 0.553.
-    ee_mass: 0.953
-    # Scale on the modelled gravity torque per arm joint, while holding position.
-    # i2rt's YAM-Ultra default is [1.0, 1.1, 1.1, 1.2, 1.0, 1.0].
-    gravity_comp_factor: [1.0, 1.1, 1.1, 1.3, 1.1, 1.0]
+    # The gripper's mass in kg for i2rt's gravity model; 0 keeps its stock LINEAR_4310's 0.553.
+    ee_mass: 0.0
+    # Scale on the modelled gravity torque per arm joint, while holding position: i2rt's default.
+    gravity_comp_factor: [1.0, 1.1, 1.1, 1.2, 1.0, 1.0]
     # The same while floating in zero gravity: 1.0 holds exactly the arm's weight.
     # Raise a little if the arm sinks, lower it if it drifts up.
     zero_gravity_comp_factor: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
