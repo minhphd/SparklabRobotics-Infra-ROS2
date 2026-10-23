@@ -290,6 +290,32 @@ their BEHAVIOR category's average, not the files' 1 kg.
 - **ROS callbacks only queue.** Neither the robot nor the model is thread-safe;
   the control loop applies commands between ticks.
 
+## The ABC bridge
+
+- **ABC runs unchanged, in its own env.** It pins torch 2.11 / CUDA 12.8, and
+  torch and ROS clash in one process; the websocket also lets the model restart
+  (~90 s, ~3 min with fast inference) without touching the rig.
+- **Its own small client**, not an import of ABC's `deploy.client`: that
+  package drags in ABC's whole deploy tree via `PYTHONPATH`. The wire format
+  (msgpack with ABC's ndarray encoding) is copied exactly.
+- **RTC is ABC's, not redesigned.** Settings are from ABC's deploy command;
+  the one change is a deadline clock instead of sleeping `dt` after each step,
+  which ran slower than 30 Hz by the step's own cost.
+- **Joint space transfers.** ABC outputs absolute joint targets. At 4,618 poses
+  from its data, plain-YAM and YAM-Ultra FK differ by a near-constant
+  +13.4 mm in z (std 1–2 mm) and 0° in orientation; ABC's joint ranges fit ours.
+- **Gripper passes through.** In ABC's data the gripper starts at ~0.99 (open)
+  and stalls at 0.3–0.5 on a bottle while the action drives toward 0: the same
+  0 closed .. 1 open as i2rt's normalisation here.
+- **Top camera is cropped to 4:3** so it matches ABC's RealSense stations'
+  640x480. The D435's vertical FOV (43°) still can't reach ABC's D405 (58°).
+- **Dry run never parks**: it never moved the arms, and parking would move real
+  ones if the real drivers are up.
+- **Recording starts after the ramp, not at Enter.** The first chunk is requested
+  before the operator confirms it; starting later would lose the first
+  input/output pair. The recorder runs in its own session so Ctrl-C reaches
+  only the bridge, which stops it after the park.
+
 ## The agent harness
 
 Separate from the rollout on purpose: the rollout holds a ~21 GB model and

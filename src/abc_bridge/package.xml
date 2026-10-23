@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>abc_bridge</name>
+  <version>0.1.0</version>
+  <description>Runs ABC's released policy on the rig as a websocket client of ABC's policy server.</description>
+  <maintainer email="phdminh01@gmail.com">SparkLab</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>sparklab_yam</exec_depend>
+  <!-- pip, no rosdep key: msgpack, websockets -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
