@@ -252,6 +252,24 @@ after the wrist homed, so `~/arm` refused on the gripper. Its target is the
 arm's measured gripper, not a constant: a sim arm starts closed, the real arm
 open (1.0 after its gripper self-calibration, 2026-10-29).
 
+### Leader hold
+
+The leader hold in the robots_realtime GIF is the driver's `start_arm_hold`:
+torque on at the pose, released when a joint's current rises above a sampled
+baseline. Here the release is a 2 deg push read from the position the node
+already polls, so there is no current baseline to sample or threshold to tune,
+and no extra bus read per tick.
+
+### Leader dither: tried and removed
+
+robots_realtime enables the leader driver's stiction-breaking dither by default.
+On this unit (5.5 V supply, 2026-10-29, hands off) it does not work: at its
+±0.65 deg the joints moved 0–0.5 deg p2p for any torque limit up to 300, since
+the P term on a 7-tick error stays far below the limit. At ±1.5–5 deg they
+walked instead of oscillating (j5 -13 deg in 2 s): the dither re-centres on the
+present pose every tick, so stiction ratchets it one way, and an armed follower
+would drift with it. The driver also rewrites `P_Coefficient` in unlocked EEPROM.
+
 ## Shutting down safely
 
 **Signals.** By default, Ctrl-C makes rclpy shut ROS down immediately — after

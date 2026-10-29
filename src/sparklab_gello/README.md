@@ -102,6 +102,7 @@ Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_
 | `arm` | `left` | `left` or `right` |
 | `port` | auto | servo adapter; auto when exactly one `/dev/tty.usbmodem*`, `ttyACM*` or `ttyUSB*` exists |
 | `home` | true | drive the leader to YAM zero and the lever to the measured gripper on start-up, then release it |
+| `hold` | false | lock the leader's arm joints at half torque once every joint has been within 0.5 deg for 1 s; pushing any joint 2 deg releases them. The lever stays free |
 | `calibration_path`, `mapping_path` | this package's `config/` | per leader unit |
 | `rate_hz` | 100.0 | |
 | `state_timeout_s` | 0.1 | |

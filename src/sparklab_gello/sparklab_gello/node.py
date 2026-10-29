@@ -61,7 +61,8 @@ class GelloNode(Node):
                 read_retries=self.declare_parameter("read_retries", 1).value,
                 max_read_latency_s=self.declare_parameter("max_read_latency_s", 0.1).value,
                 max_input_speed_deg_s=self.declare_parameter("max_input_speed_deg_s", 720.0).value,
-                range_margin_deg=self.declare_parameter("range_margin_deg", 10.0).value)
+                range_margin_deg=self.declare_parameter("range_margin_deg", 10.0).value,
+                hold=self.declare_parameter("hold", False).value)
             port = reader.connect()
             self.get_logger().info(f"GELLO on {port} ({reader.calibration_path.name})")
             if self.declare_parameter("home", True).value:

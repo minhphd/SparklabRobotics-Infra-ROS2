@@ -28,6 +28,9 @@ NAMES = [f"joint_{j}" for j in range(1, ARM_JOINTS + 1)]
 HOME_SPEED = 300  # raw Goal_Velocity, steps/s (~26 deg/s); 0 would be the servo's maximum
 HOME_TORQUE = 500  # raw Torque_Limit of 1000, the leader driver's own approach limit
 HOME_TOL_DEG = 2.0  # the servos settle ~1 deg short of the goal
+HOLD_AFTER_S = 1.0  # every joint within HOLD_STILL_DEG this long -> hold
+HOLD_STILL_DEG = 0.5
+HOLD_RELEASE_DEG = 2.0  # any joint pushed this far from the hold -> release
 
 
 class GelloInputError(RuntimeError):
@@ -53,17 +56,20 @@ class GelloReader:
     max_read_latency_s: a read slower than this fails.
     max_input_speed_deg_s: a joint reading changing faster than this fails.
     range_margin_deg: allowed excess beyond the EEPROM calibration range.
+    hold: lock the arm joints where they are once the leader is still; a push releases them.
     """
 
     def __init__(self, calibration_path: str | Path, mapping_path: str | Path, port: str = "",
                  read_retries: int = 1, max_read_latency_s: float = 0.1,
-                 max_input_speed_deg_s: float = 720.0, range_margin_deg: float = 10.0) -> None:
+                 max_input_speed_deg_s: float = 720.0, range_margin_deg: float = 10.0,
+                 hold: bool = False) -> None:
         self.calibration_path = Path(calibration_path)
         self.port = port
         self.read_retries = read_retries
         self.max_read_latency_s = max_read_latency_s
         self.max_input_speed_deg_s = max_input_speed_deg_s
         self.range_margin_deg = range_margin_deg
+        self.hold = hold
         mapping = yaml.safe_load(Path(mapping_path).read_text())
         self._joint_map = mapping["joints"]
         missing = [k for k, v in self._joint_map.items() if v.get("sign") is None]
@@ -76,6 +82,8 @@ class GelloReader:
         self._half_range_deg: dict[str, float] = {}
         self._raw_max = 0
         self._prev: tuple[float, dict[str, float]] | None = None
+        self._still: tuple[float, dict[str, float]] | None = None
+        self._held: dict[str, float] | None = None
 
     def connect(self) -> str:
         """Open the bus read-only and check the calibration file against the EEPROM.
@@ -149,6 +157,8 @@ class GelloReader:
             the gripper target 0 closed .. 1 open.
         """
         deg, raw = self._read()
+        if self.hold:
+            self._update_hold(deg)
         q = np.empty(ARM_JOINTS)
         for j in range(ARM_JOINTS):
             m = self._joint_map[NAMES[j]]
@@ -157,6 +167,27 @@ class GelloReader:
         g = (raw - self._raw_a) / (self._raw_b - self._raw_a)
         # + 0.0 turns the -0.0 that raw == raw_a yields into 0.0.
         return q, float(np.clip(g, 0.0, 1.0)) + 0.0
+
+    def _update_hold(self, deg: dict[str, float]) -> None:
+        bus = self._leader.bus
+        try:
+            if self._held is not None:
+                if max(abs(deg[n] - self._held[n]) for n in NAMES) > HOLD_RELEASE_DEG:
+                    bus.disable_torque(NAMES)
+                    self._held, self._still = None, None
+                return
+            now = time.monotonic()
+            if self._still is None or max(abs(deg[n] - self._still[1][n]) for n in NAMES) > HOLD_STILL_DEG:
+                self._still = (now, dict(deg))
+            elif now - self._still[0] > HOLD_AFTER_S:
+                bus.sync_write("Torque_Limit", {n: HOME_TORQUE for n in NAMES}, normalize=False)
+                # Present pose on both sides of the enable, as in home().
+                bus.sync_write("Goal_Position", deg)
+                bus.enable_torque(NAMES)
+                bus.sync_write("Goal_Position", deg)
+                self._held = dict(deg)
+        except (ConnectionError, OSError) as e:
+            raise GelloInputError(f"GELLO hold write failed: {e}") from e
 
     def _read(self) -> tuple[dict[str, float], float]:
         """One validated reading: joint degrees and the lever's raw ticks."""
@@ -204,5 +235,10 @@ class GelloReader:
 
     def disconnect(self) -> None:
         if self._leader is not None:
-            self._leader.bus.disconnect(disable_torque=False)
-            self._leader = None
+            try:
+                if self._held is not None:
+                    self._leader.bus.disable_torque(NAMES)
+            finally:
+                self._held = None
+                self._leader.bus.disconnect(disable_torque=False)
+                self._leader = None

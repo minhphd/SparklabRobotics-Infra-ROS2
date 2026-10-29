@@ -1,11 +1,13 @@
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import yaml
 
+from sparklab_gello import reader as reader_mod
 from sparklab_gello.reader import GelloInputError, GelloReader
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
@@ -126,6 +128,58 @@ class GelloInputTest(unittest.TestCase):
         self.bus.delay_s = 0.06
         with self.assertRaisesRegex(GelloInputError, "took"):
             self.t.read()
+
+
+class HoldTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bus = HomingBus()
+        self.bus.disconnect = lambda disable_torque=True: None
+        self.t = connected_reader(self.bus)
+        self.t.hold = True
+        patcher = mock.patch.object(reader_mod, "HOLD_AFTER_S", 0.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def events(self) -> list[str]:
+        return [e[0] for e in self.bus.log]
+
+    def test_off_by_default_never_writes(self) -> None:
+        self.t.hold = False
+        for _ in range(5):
+            self.t.read()
+        self.assertEqual(self.bus.log, [])
+
+    def test_still_leader_is_held_at_its_present_pose(self) -> None:
+        self.bus.deg["joint_3"] = 12.0
+        self.t.read()
+        self.assertEqual(self.bus.log, [])
+        self.t.read()
+        self.assertEqual(self.events(), ["Torque_Limit", "Goal_Position", "enable", "Goal_Position"])
+        self.assertEqual(self.bus.log[-1][1]["joint_3"], 12.0)
+        self.assertTrue(self.bus.torque)
+
+    def test_moving_leader_is_not_held(self) -> None:
+        for k in range(5):
+            self.bus.deg["joint_1"] = float(k)
+            self.t.read()
+        self.assertFalse(self.bus.torque)
+
+    def test_small_push_keeps_the_hold_a_larger_one_releases(self) -> None:
+        self.t.read()
+        self.t.read()
+        self.bus.deg["joint_5"] += 1.0
+        self.t.read()
+        self.assertTrue(self.bus.torque)
+        self.bus.deg["joint_5"] += 1.5
+        self.t.read()
+        self.assertFalse(self.bus.torque)
+        self.assertEqual(self.events()[-1], "disable")
+
+    def test_disconnect_while_held_releases(self) -> None:
+        self.t.read()
+        self.t.read()
+        self.t.disconnect()
+        self.assertFalse(self.bus.torque)
 
 
 class HomingBus(FakeBus):
