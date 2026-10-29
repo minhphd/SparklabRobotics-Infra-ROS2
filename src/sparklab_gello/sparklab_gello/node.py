@@ -66,7 +66,7 @@ class GelloNode(Node):
             self.get_logger().info(f"GELLO on {port} ({reader.calibration_path.name})")
             if self.declare_parameter("home", True).value:
                 ok, state = wait_for_message(JointState, self, f"/{self._arm}/joint_states",
-                                             time_to_wait=5.0)
+                                             time_to_wait=15.0)
                 if not ok:
                     raise RuntimeError(f"no /{self._arm}/joint_states to home to; start the "
                                        "driver first, or pass -p home:=false")
