@@ -128,5 +128,72 @@ class GelloInputTest(unittest.TestCase):
             self.t.read()
 
 
+class HomingBus(FakeBus):
+    """Records writes; like the leader's servos, a goal counts only while torque is on."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.log: list[tuple] = []
+        self.torque = False
+
+    def sync_write(self, data_name, values, *, normalize=True, num_retry=0):
+        self.log.append((data_name, dict(values), normalize))
+        if data_name == "Goal_Position" and self.torque:
+            if "gripper" in values:
+                self.raw = values["gripper"]
+            else:
+                self.deg.update(values)
+
+    def enable_torque(self, motors=None, num_retry=0):
+        self.log.append(("enable", list(motors)))
+        self.torque = True
+
+    def disable_torque(self, motors=None, num_retry=0):
+        self.log.append(("disable", list(motors)))
+        self.torque = False
+
+
+class GelloHomeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bus = HomingBus()
+        self.t = connected_reader(self.bus)
+        self.t.max_input_speed_deg_s = 1e9  # the fake reaches its goal instantly
+
+    def test_home_holds_present_pose_through_enable_then_sends_goal_and_releases(self) -> None:
+        self.bus.deg["joint_1"] = -40.0
+        self.bus.raw = 1500
+        err = self.t.home(0.0)
+        names = [e[0] for e in self.bus.log]
+        self.assertEqual(names, ["Goal_Velocity", "Torque_Limit", "Goal_Position", "Goal_Position",
+                                 "enable", "Goal_Position", "Goal_Position", "disable"])
+        self.assertTrue(all(v > 0 for v in self.bus.log[0][1].values()))
+        self.assertIn("gripper", self.bus.log[0][1])
+        self.assertEqual(self.bus.log[2][1]["joint_1"], -40.0)
+        self.assertEqual(self.bus.log[3][1], {"gripper": 1500})
+        self.assertIn("gripper", self.bus.log[-1][1])
+        self.assertFalse(self.bus.torque)
+        self.assertLess(err, 1.0)
+
+    def test_home_goal_maps_to_yam_zero_and_the_given_gripper(self) -> None:
+        self.bus.raw = 1500
+        self.t.home(0.0)
+        q, g = self.t.read()
+        np.testing.assert_allclose(q, np.zeros(6), atol=1e-12)
+        self.assertEqual(g, 0.0)
+        self.t.home(1.0)
+        self.assertAlmostEqual(self.t.read()[1], 1.0)
+
+    def test_home_releases_torque_on_failure_and_on_timeout(self) -> None:
+        self.bus.error = OSError("bus gone")
+        with self.assertRaises(GelloInputError):
+            self.t.home(0.0)
+        self.assertFalse(self.bus.torque)
+        self.bus.error = None
+        self.bus.deg = {n: 0.0 for n in JOINTS}
+        self.bus.sync_write = lambda *a, **kw: None  # a joint that never moves
+        self.assertGreater(self.t.home(0.0, timeout_s=0.1), 2.0)
+        self.assertFalse(self.bus.torque)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,8 @@
 # sparklab_gello
 
 One GELLO (YAM Active Leader) driving one YAM arm, joint to joint, through the
-YAM driver's command topics. Reads the leader without enabling torque or
-writing EEPROM.
+YAM driver's command topics. Never writes the leader's EEPROM; its torque is on
+only while homing at start-up.
 
 ```
 sparklab_gello/reader.py   read, validate and convert one leader reading to YAM targets
@@ -27,6 +27,12 @@ ros2 service call /gello/disarm std_srvs/srv/Trigger      # stop following
 
 A second leader on the other arm needs its own node name and files:
 `-r __node:=gello_right -p arm:=right -p calibration_path:=... -p mapping_path:=...`.
+
+On start-up the node drives the leader to the pose that maps to YAM zero and the
+lever to the arm's measured gripper, at ~26 deg/s and half torque, then releases them: keep hands off it until
+`leader homed and released` is logged. A freshly started or parked arm is at zero,
+so `~/arm` then passes without posing by hand. The arm's driver must be running first. `-p home:=false` skips this. See
+[`DESIGN.md`](../../DESIGN.md#homing-the-leader).
 
 Before `~/arm`, pose the leader like the arm: the request is refused, naming
 the joint, while any joint is more than 0.15 rad off.
@@ -74,9 +80,10 @@ Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_
   GELLO reading must be within `arm_tol` (0.15 rad) of the measured pose per
   joint and `gripper_arm_tol` (0.2) on the gripper.
 - While ARMED, every target moves at most `max_joint_speed` (rad/s) and
-  `max_gripper_speed` (1/s) from the measured pose, scaled by elapsed time,
-  so the publish rate does not change the speed. The gripper target is also
-  clipped to 0..1.
+  `max_gripper_speed` (1/s) from the previous target, scaled by elapsed time,
+  so the publish rate does not change the speed. The driver's `max_step` bounds
+  how far a target leads the measured pose. The gripper target is also clipped
+  to 0..1. See [`DESIGN.md`](../../DESIGN.md#the-gello-node).
 - A failed, late, non-finite, out-of-range or jumping GELLO reading → FAULT.
   `joint_states` silent for `state_timeout_s` (0.1 s) → FAULT. FAULT needs a
   new `~/arm`. The error repeats once a second; the node keeps running.
@@ -94,6 +101,7 @@ Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_
 |---|---|---|
 | `arm` | `left` | `left` or `right` |
 | `port` | auto | servo adapter; auto when exactly one `/dev/tty.usbmodem*`, `ttyACM*` or `ttyUSB*` exists |
+| `home` | true | drive the leader to YAM zero and the lever to the measured gripper on start-up, then release it |
 | `calibration_path`, `mapping_path` | this package's `config/` | per leader unit |
 | `rate_hz` | 100.0 | |
 | `state_timeout_s` | 0.1 | |

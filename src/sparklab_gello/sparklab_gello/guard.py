@@ -63,6 +63,7 @@ class ArmGuard:
         # Bumped on every hold transition, so the caller commands each new hold exactly once.
         self.hold_seq = 0
         self.last_cmd_t: float | None = None
+        self.last_cmd: np.ndarray | None = None
         self.pending_since: float | None = None
         self.arm_result = "no arm request yet"
 
@@ -135,6 +136,7 @@ class ArmGuard:
             return self.arm_result
         self.state, self.reason = ARMED, "armed by explicit request"
         self.last_cmd_t = self.clock()
+        self.last_cmd = present.copy()
         self.arm_result = "ARMED"
         return self.arm_result
 
@@ -154,6 +156,9 @@ class ArmGuard:
     def filter(self, target: np.ndarray, present: np.ndarray,
                caps: np.ndarray | None = None) -> tuple[np.ndarray, bool]:
         """Decide what to command for one incoming target.
+
+        Each command moves at most speed x dt from the previous one, not from the
+        measured pose; the driver's max_step bounds how far it leads the arm.
 
         target: requested absolute positions; arming checks this unclamped value.
         present: measured positions.
@@ -185,7 +190,8 @@ class ArmGuard:
         if caps is not None:
             cap[: self.n_arm] = np.minimum(cap[: self.n_arm], np.asarray(caps, float))
         self.last_cmd_t = now
-        return present + np.clip(target - present, -cap, cap), True
+        self.last_cmd = self.last_cmd + np.clip(target - self.last_cmd, -cap, cap)
+        return self.last_cmd.copy(), True
 
     def status(self) -> dict:
         return {"state": self.state, "reason": self.reason, "arm_result": self.arm_result,

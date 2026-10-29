@@ -214,10 +214,43 @@ is ~13 rad/s on paper, not a measured speed). The guard scales each step by
 elapsed time, and also rate-limits the gripper, which the driver only clips to
 0..1.
 
+**Steps start from the previous command, not the measured pose.** The first
+version stepped from the measured pose, so a target never led the arm by more
+than one step (0.01 rad at 1 rad/s and 100 Hz). Against i2rt's YAM gains
+(kp 80/80/80/40/10/10) that is 0.8 Nm at the base and 0.1 Nm at the wrist: on
+the real arm (2026-10-29) the base did not move and other joints crept.
+The kinematic sim tracks exactly, so it never showed. A lagging or blocked joint
+now sees the full error, up to the driver's `max_step`, as in i2rt's
+`minimum_gello` and robots_realtime, which forward the leader pose unlimited.
+
 **Second finger in sim.** i2rt's `SimRobot` writes `qpos[:7]` and runs only
 kinematics, so the LINEAR_4310's second finger, coupled by a joint equality
 that only `mj_step` enforces, never moved. The sim driver solves that joint
 from the model's own equality after every command; hardware is untouched.
+
+### Homing the leader
+
+Posing the leader by hand to within 0.15 rad of a folded arm is slow, so the
+node drives the leader there itself, as robots_realtime's `GelloLeaderAgent`
+does with `drive_to_zero`. i2rt's `minimum_gello` instead ramps the follower to
+the leader on a button press; that moves the real arm toward an arbitrary pose,
+so the leader moves instead and the arm check stays as it was.
+
+The target is each joint's `zero_deg`, not the leader's own calibrated zero,
+which is up to 5 deg away and would eat into the arm tolerance. The leader
+driver's `drive_to_config` is not used because it leaves `Goal_Velocity` at its
+power-up 0, the servo's maximum speed; homing caps it instead.
+
+On this unit (2026-10-29) a `Goal_Position` written while torque was off was
+dropped on enable: j1 sat 40 deg off with zero load, at full torque limit. The
+first homing version wrote the goal first and passed only because the leader
+started near zero. Homing now writes the present pose, enables, then writes the
+goal. Goal, speed and torque limit are RAM registers, so homing writes no EEPROM.
+
+The lever is homed too. It is free when unpowered and read 0.72, untouched,
+after the wrist homed, so `~/arm` refused on the gripper. Its target is the
+arm's measured gripper, not a constant: a sim arm starts closed, the real arm
+open (1.0 after its gripper self-calibration, 2026-10-29).
 
 ## Shutting down safely
 

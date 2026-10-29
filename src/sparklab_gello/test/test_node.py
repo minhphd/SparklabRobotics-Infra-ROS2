@@ -142,11 +142,14 @@ def test_rate_limit_is_time_based_for_joints_and_gripper(rig):
     rig.clear()
     rig.reader.q[0] += 1.0
     rig.reader.gripper = 1.0
-    time.sleep(0.3)
+    time.sleep(0.5)
     limits = GuardLimits()
-    # The probe never moves, so every command is one step from the same pose.
-    assert max(abs(c[0] - POSE[0]) for c in rig.cmds["left"]) <= limits.max_joint_speed * limits.max_dt + 1e-9
-    assert max(abs(g - POSE[6]) for g in rig.grippers["left"]) <= limits.max_gripper_speed * limits.max_dt + 1e-9
+    # The probe never moves; commands still advance, one capped step at a time.
+    joint = [POSE[0]] + [c[0] for c in rig.cmds["left"]]
+    grip = [POSE[6]] + list(rig.grippers["left"])
+    assert max(abs(np.diff(joint))) <= limits.max_joint_speed * limits.max_dt + 1e-9
+    assert max(abs(np.diff(grip))) <= limits.max_gripper_speed * limits.max_dt + 1e-9
+    assert joint[-1] == pytest.approx(POSE[0] + 1.0) and grip[-1] == pytest.approx(1.0)
 
 
 def test_disarm_holds_the_measured_pose_once_then_stops(rig):

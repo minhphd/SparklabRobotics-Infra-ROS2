@@ -1,8 +1,9 @@
-"""One YAM Active Leader (GELLO), read-only, as YAM joint targets.
+"""One YAM Active Leader (GELLO) as YAM joint targets.
 
 Reads the leader through its own driver: no ``calibrate()``, ``configure()``,
-``calibrate_trigger()`` or torque write. Driver degrees become YAM radians
-through ``gello_to_yam.yaml``; the lever's raw ticks become a gripper target 0..1.
+``calibrate_trigger()`` or EEPROM write; torque is on only inside ``home()``.
+Driver degrees become YAM radians through ``gello_to_yam.yaml``; the lever's raw
+ticks become a gripper target 0..1.
 
 Every ``read()`` is a fresh bus read. A failed, late, malformed or implausible
 reading raises ``GelloInputError`` and returns nothing, so nothing stale is ever
@@ -24,6 +25,9 @@ from sparklab_yam.model.kinematics import ARM_XML
 
 PORT_GLOBS = ("/dev/tty.usbmodem*", "/dev/ttyACM*", "/dev/ttyUSB*")
 NAMES = [f"joint_{j}" for j in range(1, ARM_JOINTS + 1)]
+HOME_SPEED = 300  # raw Goal_Velocity, steps/s (~26 deg/s); 0 would be the servo's maximum
+HOME_TORQUE = 500  # raw Torque_Limit of 1000, the leader driver's own approach limit
+HOME_TOL_DEG = 2.0  # the servos settle ~1 deg short of the goal
 
 
 class GelloInputError(RuntimeError):
@@ -105,6 +109,38 @@ class GelloReader:
         self._prev = None
         self._leader = leader
         return port
+
+    def home(self, gripper: float, timeout_s: float = 5.0) -> float:
+        """Drive the leader to YAM zero and the lever to gripper, then release.
+
+        gripper: lever target, 0 closed .. 1 open; the robot's measured gripper.
+        Returns: the largest remaining error in degrees when torque was released.
+        """
+        bus = self._leader.bus
+        motors = NAMES + ["gripper"]
+        goal = {n: float(self._joint_map[n]["zero_deg"]) for n in NAMES}
+        raw_goal = int(round(self._raw_a + np.clip(gripper, 0.0, 1.0) * (self._raw_b - self._raw_a)))
+        bus.sync_write("Goal_Velocity", {n: HOME_SPEED for n in motors}, normalize=False)
+        bus.sync_write("Torque_Limit", {n: HOME_TORQUE for n in motors}, normalize=False)
+        try:
+            # These servos drop a goal written while torque is off; hold the present
+            # pose through the enable so a firmware that keeps it cannot jump.
+            deg, raw = self._read()
+            bus.sync_write("Goal_Position", deg)
+            bus.sync_write("Goal_Position", {"gripper": int(raw)}, normalize=False)
+            bus.enable_torque(motors)
+            bus.sync_write("Goal_Position", goal)
+            bus.sync_write("Goal_Position", {"gripper": raw_goal}, normalize=False)
+            deadline = time.monotonic() + timeout_s
+            while True:
+                deg, raw = self._read()
+                err = max(max(abs(deg[n] - goal[n]) for n in NAMES),
+                          abs(raw - raw_goal) * 360 / (self._raw_max + 1))
+                if err < HOME_TOL_DEG or time.monotonic() > deadline:
+                    return err
+                time.sleep(0.05)
+        finally:
+            bus.disable_torque(motors)
 
     def read(self) -> tuple[np.ndarray, float]:
         """One validated reading as YAM targets.

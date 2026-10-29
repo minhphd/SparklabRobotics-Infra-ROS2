@@ -24,6 +24,7 @@ import numpy as np
 from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.node import Node
+from rclpy.wait_for_message import wait_for_message
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Float64MultiArray
 from std_srvs.srv import Trigger
@@ -63,6 +64,17 @@ class GelloNode(Node):
                 range_margin_deg=self.declare_parameter("range_margin_deg", 10.0).value)
             port = reader.connect()
             self.get_logger().info(f"GELLO on {port} ({reader.calibration_path.name})")
+            if self.declare_parameter("home", True).value:
+                ok, state = wait_for_message(JointState, self, f"/{self._arm}/joint_states",
+                                             time_to_wait=5.0)
+                if not ok:
+                    raise RuntimeError(f"no /{self._arm}/joint_states to home to; start the "
+                                       "driver first, or pass -p home:=false")
+                gripper = state.position[ARM_JOINTS]
+                self.get_logger().warning(f"homing the leader to YAM zero, lever to {gripper:.2f}; "
+                                          "keep hands off it")
+                err = reader.home(gripper)
+                self.get_logger().info(f"leader homed and released ({err:.1f} deg off)")
         self._reader = reader
         self._guard = ArmGuard(ARM_JOINTS, limits)
         self._lock = threading.Lock()

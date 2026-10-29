@@ -56,7 +56,16 @@ class ArmGuardTest(unittest.TestCase):
         np.testing.assert_allclose(cmd[6], 0.04)
         self.clock.t += 0.2   # a slow loop, still under the command timeout
         cmd, _ = self.g.filter(target, self.home)
-        np.testing.assert_allclose(cmd[:6], 4.0 * GuardLimits().max_dt)
+        np.testing.assert_allclose(cmd[:6], 0.04 + 4.0 * GuardLimits().max_dt)
+
+    def test_a_lagging_arm_still_gets_commands_that_reach_the_target(self) -> None:
+        # The arm never moves, as a joint held by stiction would.
+        self.arm()
+        target = np.full(7, 0.5)
+        for _ in range(30):
+            self.clock.t += 0.01
+            cmd, _ = self.g.filter(target, self.home)
+        np.testing.assert_allclose(cmd, target)
 
     def test_per_call_caps_still_apply(self) -> None:
         self.arm()
