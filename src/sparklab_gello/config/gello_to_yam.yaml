@@ -1,0 +1,16 @@
+# Joint mapping for the lab's one GELLO leader unit (see config/README.md); another unit
+# needs its own values. q_yam [rad] = sign * radians(leader_deg - zero_deg).
+calibration: yam_active_leader_eeprom.json
+
+# PROVISIONAL. zero_deg: leader matched by eye to the MuJoCo model at qpos = 0, 2026-10-19.
+joints:
+  joint_1: {yam: joint1, sign: -1, zero_deg: 0.3}
+  joint_2: {yam: joint2, sign: -1, zero_deg: -0.1}
+  joint_3: {yam: joint3, sign: -1, zero_deg: -0.1}
+  joint_4: {yam: joint4, sign: -1, zero_deg: -0.1}
+  joint_5: {yam: joint5, sign: -1, zero_deg: -4.7}
+  joint_6: {yam: joint6, sign: -1, zero_deg: -4.0}
+
+# Lever (motor 7), raw ticks: A (resting) -> 0 = closed, B (raised) -> 1 = open.
+# Operating range measured on this unit, not verified mechanical end stops.
+gripper: {raw_a: 2045, raw_b: 1361}

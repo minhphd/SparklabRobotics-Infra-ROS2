@@ -63,12 +63,13 @@ Only one thing drives the arms at a time: the teleop node *or* a LeRobot process
 | [`src/sparklab_yam`](src/sparklab_yam/README.md) | the robot: arm driver, teleop node, IK, arm model, launch file, rig config | `driver.py`, `launch/yam.launch.py` |
 | [`src/sparklab_quest`](src/sparklab_quest/README.md) | the headset: bridge node, web page, controller input | `bridge.py` |
 | [`src/sparklab_cameras`](src/sparklab_cameras/README.md) | the cameras: publisher node and setup tools | `node.py` |
+| [`src/sparklab_gello`](src/sparklab_gello/README.md) | a GELLO leader driving one arm, joint to joint | `node.py` |
 | [`src/lerobot_robot_sparklab`](src/lerobot_robot_sparklab/README.md) | LeRobot plugin: robot, teleoperator, recording, live rollout, harness | `follower.py` |
 | [`src/capx_sparklab`](src/capx_sparklab/README.md) | cap-x's agent tools on both arms: an LLM writes Python against perceive / grasp / move / hand-over tools | `api.py`, `env.py` |
 | [`src/sparklab_sim`](src/sparklab_sim/README.md) | Isaac Sim digital twin: the rig's ROS 2 interface on its own domain, from Isaac's own Python | `twin.py`, `policy_server.py` |
 | [`scripts/`](scripts/README.md) | everyday commands and policy-debugging tools | `rollout.sh` |
 
-The first five are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
+The first six are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
 under [`scripts/capx_python.sh`](scripts/capx_python.sh), next to cap-x's GPU stack.
 
 ## Topics
@@ -146,6 +147,7 @@ conda env config vars set LD_LIBRARY_PATH="$CONDA_PREFIX/lib" && conda activate 
 pip install "lerobot==0.6.0" mujoco pyrealsense2 fastapi "uvicorn[standard]" aiortc av \
     opencv-python-headless pyyaml "setuptools<80" "pytest<8"
 git clone https://github.com/i2rt-robotics/i2rt && pip install -e ./i2rt
+pip install "lerobot_teleoperator_yamactiveleader @ git+https://github.com/uynitsuj/lerobot_teleoperator_yamactiveleader@4ed519781152562ba338a8ebcd0e4cd781b3029f"   # GELLO only
 conda install -c conda-forge ffmpeg
 ```
 
@@ -176,6 +178,7 @@ headset, open the URL the bridge prints (`https://<this-machine>:8443/`).
 | to... | run (with the robot started, without `teleop:=true`) |
 |---|---|
 | drive the arms from the keyboard, one joint at a time | `ros2 run sparklab_yam keyboard` |
+| drive one arm from a GELLO leader | `ros2 run sparklab_gello gello --ros-args -p arm:=left`, then `ros2 service call /gello/arm std_srvs/srv/Trigger` |
 | record a dataset | `./scripts/record_manual.sh` |
 | run a policy | `./scripts/rollout.sh` |
 | change the policy's task while it runs | `./scripts/rollout.sh --mode=live`, then `ros2 topic pub --once /rollout/task std_msgs/msg/String "{data: 'pick up the scissors'}"` |
@@ -343,7 +346,7 @@ and restart the launch. `left_base → right_base` is
 ## Tests
 
 ```bash
-colcon test --packages-select sparklab_quest sparklab_yam sparklab_cameras capx_sparklab && colcon test-result --verbose
+colcon test --packages-select sparklab_quest sparklab_yam sparklab_cameras sparklab_gello capx_sparklab && colcon test-result --verbose
 ./scripts/capx_python.sh -m pytest src/capx_sparklab/test     # cap-x's planning, on the GPU
 ```
 

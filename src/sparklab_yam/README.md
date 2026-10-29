@@ -18,6 +18,7 @@ sparklab_yam/ik/            inverse kinematics
 sparklab_yam/model/         the arm model (MuJoCo XML, URDF, meshes)
 sparklab_yam/sim/           Isaac scene files, read by sparklab_sim
 sparklab_yam/run.py         shared main() that lets a node park the arm on Ctrl-C
+sparklab_yam/sim_coupling.py  in sim, moves the gripper's second finger with the first
 test/                       driver, teleop, keyboard and calibration tests, no hardware
 ```
 

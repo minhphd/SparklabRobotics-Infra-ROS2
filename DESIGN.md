@@ -185,6 +185,40 @@ it, so one cert works on the LAN, the campus network and a USB tunnel.
 Publishing them as a latched topic means a teleop that starts later still gets
 them.
 
+## The GELLO node
+
+GELLO is an absolute leader: unlike Quest's clutch, which re-anchors on every
+grip, it commands wherever the operator's hand is. Following it on start-up,
+after a fault or after a restart is a jump, so the node starts DISARMED and
+arms only on an explicit request whose next reading matches the measured pose.
+
+**The guard lives in the node, not the driver.** In the pre-ROS stack it lived
+in `arm_server`, the one process that outlived a crashed client. Here that
+would be the driver, which Quest teleop shares; the node carries the same
+`ArmGuard` instead. What that gives up: if the node is killed while ARMED,
+nothing re-commands a hold, and the driver keeps its last target. Because the
+driver clamps every command to `max_step` from the measured pose, that target
+is at most one step (0.133–0.15 rad) from where the arm was, so the arm stops
+there rather than running on. A driver-side command timeout would move that
+stop to the measured pose; it was left out to keep the driver unchanged for
+Quest, and is the first thing to add if that step matters on hardware.
+
+**Three different stops.** Not publishing leaves the driver on its last target.
+Leaving ARMED publishes the measured pose once, which is a hold where the arm
+is. A hold is never built from stale `joint_states`: a pose the driver stopped
+reporting is not where the arm is.
+
+**Rate limits are per second, not per message.** The driver's `max_step` is
+per message, so its speed bound scales with the publish rate (0.133 rad × 100 Hz
+is ~13 rad/s on paper, not a measured speed). The guard scales each step by
+elapsed time, and also rate-limits the gripper, which the driver only clips to
+0..1.
+
+**Second finger in sim.** i2rt's `SimRobot` writes `qpos[:7]` and runs only
+kinematics, so the LINEAR_4310's second finger, coupled by a joint equality
+that only `mj_step` enforces, never moved. The sim driver solves that joint
+from the model's own equality after every command; hardware is untouched.
+
 ## Shutting down safely
 
 **Signals.** By default, Ctrl-C makes rclpy shut ROS down immediately — after
