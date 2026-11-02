@@ -1,0 +1,16 @@
+# Joint mapping for the right GELLO leader unit (USB serial 5B79018636).
+# q_yam [rad] = sign * radians(leader_deg - zero_deg).
+calibration: yam_active_leader_right_eeprom.json
+
+# PROVISIONAL. zero_deg: 0 because the EEPROM calibration was taken posed at YAM zero, 2026-10-30;
+# signs copied from the left unit.
+joints:
+  joint_1: {yam: joint1, sign: -1, zero_deg: 0.0}
+  joint_2: {yam: joint2, sign: -1, zero_deg: 0.0}
+  joint_3: {yam: joint3, sign: -1, zero_deg: 0.0}
+  joint_4: {yam: joint4, sign: -1, zero_deg: 0.0}
+  joint_5: {yam: joint5, sign: -1, zero_deg: 0.0}
+  joint_6: {yam: joint6, sign: -1, zero_deg: 0.0}
+
+# Lever (motor 7), raw ticks: A (resting) -> 0 = closed, B (raised) -> 1 = open. Measured 2026-10-30.
+gripper: {raw_a: 2047, raw_b: 1417}

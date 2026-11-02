@@ -71,10 +71,12 @@ class GelloNode(Node):
                 if not ok:
                     raise RuntimeError(f"no /{self._arm}/joint_states to home to; start the "
                                        "driver first, or pass -p home:=false")
+                q = np.asarray(state.position[:ARM_JOINTS], dtype=float)
                 gripper = state.position[ARM_JOINTS]
-                self.get_logger().warning(f"homing the leader to YAM zero, lever to {gripper:.2f}; "
+                self.get_logger().warning(f"homing the leader to the arm's pose "
+                                          f"{np.round(q, 2).tolist()}, lever to {gripper:.2f}; "
                                           "keep hands off it")
-                err = reader.home(gripper)
+                err = reader.home(q, gripper)
                 self.get_logger().info(f"leader homed and released ({err:.1f} deg off)")
         self._reader = reader
         self._guard = ArmGuard(ARM_JOINTS, limits)

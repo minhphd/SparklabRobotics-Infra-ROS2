@@ -118,15 +118,18 @@ class GelloReader:
         self._leader = leader
         return port
 
-    def home(self, gripper: float, timeout_s: float = 5.0) -> float:
-        """Drive the leader to YAM zero and the lever to gripper, then release.
+    def home(self, q: np.ndarray, gripper: float, timeout_s: float = 5.0) -> float:
+        """Drive the leader to the pose that maps to q and the lever to gripper, then release.
 
+        q: YAM joint positions (6,) in rad; the robot's measured pose.
         gripper: lever target, 0 closed .. 1 open; the robot's measured gripper.
         Returns: the largest remaining error in degrees when torque was released.
         """
         bus = self._leader.bus
         motors = NAMES + ["gripper"]
-        goal = {n: float(self._joint_map[n]["zero_deg"]) for n in NAMES}
+        goal = {n: float(self._joint_map[n]["zero_deg"]
+                         + self._joint_map[n]["sign"] * np.degrees(q[j]))
+                for j, n in enumerate(NAMES)}
         raw_goal = int(round(self._raw_a + np.clip(gripper, 0.0, 1.0) * (self._raw_b - self._raw_a)))
         bus.sync_write("Goal_Velocity", {n: HOME_SPEED for n in motors}, normalize=False)
         bus.sync_write("Torque_Limit", {n: HOME_TORQUE for n in motors}, normalize=False)

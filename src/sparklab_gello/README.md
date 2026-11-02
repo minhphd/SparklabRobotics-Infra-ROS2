@@ -10,6 +10,8 @@ sparklab_gello/guard.py    DISARMED / ARMED / FAULT latch with time-based rate l
 sparklab_gello/node.py     the ROS 2 node: reader -> guard -> command topics
 config/gello_to_yam.yaml   GELLO -> YAM joint sign, zero and lever end stops (provisional)
 config/yam_active_leader_eeprom.json  the leader's EEPROM calibration, read back
+config/*_right.*           the same for the right leader
+launch/teleop.launch.py    both drivers and both GELLO nodes
 test/                      reader, guard and node tests; no hardware needed
 ```
 
@@ -28,10 +30,21 @@ ros2 service call /gello/disarm std_srvs/srv/Trigger      # stop following
 A second leader on the other arm needs its own node name and files:
 `-r __node:=gello_right -p arm:=right -p calibration_path:=... -p mapping_path:=...`.
 
-On start-up the node drives the leader to the pose that maps to YAM zero and the
+Both arms and both of the lab's leaders, drivers included, from one launch:
+
+```bash
+ros2 launch sparklab_gello teleop.launch.py                          # real arms
+ros2 launch sparklab_gello teleop.launch.py sim:=true viewer:=true   # simulated arms
+ros2 service call /gello/arm std_srvs/srv/Trigger                    # left; /gello_right/arm for the right
+```
+
+It picks each leader by USB serial (left `5B8E115998`, right `5B79018636`), sets j5/j6
+`max_step` to 0.3 rad for its drivers ([`DESIGN.md`](../../DESIGN.md#wrist-max_step-in-teleoplaunchpy))
+and, in sim, `state_timeout_s` to 0.5 s. Ctrl-C parks both arms.
+
+On start-up the node drives the leader to the pose that maps to the arm's measured pose and the
 lever to the arm's measured gripper, at ~26 deg/s and half torque, then releases them: keep hands off it until
-`leader homed and released` is logged. A freshly started or parked arm is at zero,
-so `~/arm` then passes without posing by hand. The arm's driver must be running first. `-p home:=false` skips this. See
+`leader homed and released` is logged. `~/arm` then passes without posing by hand. The arm's driver must be running first. `-p home:=false` skips this. See
 [`DESIGN.md`](../../DESIGN.md#homing-the-leader).
 
 Before `~/arm`, pose the leader like the arm: the request is refused, naming
@@ -101,7 +114,7 @@ Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_
 |---|---|---|
 | `arm` | `left` | `left` or `right` |
 | `port` | auto | servo adapter; auto when exactly one `/dev/tty.usbmodem*`, `ttyACM*` or `ttyUSB*` exists |
-| `home` | true | drive the leader to YAM zero and the lever to the measured gripper on start-up, then release it |
+| `home` | true | drive the leader to the arm's measured pose and the lever to the measured gripper on start-up, then release it |
 | `hold` | false | lock the leader's arm joints at half torque once every joint has been within 0.5 deg for 1 s; pushing any joint 2 deg releases them. The lever stays free |
 | `calibration_path`, `mapping_path` | this package's `config/` | per leader unit |
 | `rate_hz` | 100.0 | |

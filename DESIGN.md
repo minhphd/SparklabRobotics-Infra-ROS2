@@ -236,8 +236,11 @@ does with `drive_to_zero`. i2rt's `minimum_gello` instead ramps the follower to
 the leader on a button press; that moves the real arm toward an arbitrary pose,
 so the leader moves instead and the arm check stays as it was.
 
-The target is each joint's `zero_deg`, not the leader's own calibrated zero,
-which is up to 5 deg away and would eat into the arm tolerance. The leader
+The target is the arm's measured pose mapped back through `zero_deg` and `sign`,
+not the leader's own calibrated zero, which is up to 5 deg away and would eat
+into the arm tolerance. It was YAM zero until 2026-10-30, when the real right
+arm started with j6 at -0.25 rad: arming was refused until the arm was parked,
+and the park closed the gripper under a lever homed open. The leader
 driver's `drive_to_config` is not used because it leaves `Goal_Velocity` at its
 power-up 0, the servo's maximum speed; homing caps it instead.
 
@@ -269,6 +272,16 @@ the P term on a 7-tick error stays far below the limit. At ±1.5–5 deg they
 walked instead of oscillating (j5 -13 deg in 2 s): the dither re-centres on the
 present pose every tick, so stiction ratchets it one way, and an armed follower
 would drift with it. The driver also rewrites `P_Coefficient` in unlocked EEPROM.
+
+### Wrist max_step in teleop.launch.py
+
+With the driver capping the lead at `max_step`, a joint tops out near
+`kp * max_step / kd` before friction: ~2.1 rad/s for j1–3, ~4 for j4, but ~1
+for j5/j6 (kp 10, kd 1.5). On the real arms (2026-10-30) j5 lagged on both
+sides, with the driver clamping leads of 0.24–0.26 rad. The launch doubles
+j5/j6 `max_step` to 0.3 (~2 rad/s, at most ~3 Nm of lead) rather than raising
+i2rt's kp, which every other client of the driver, ABC included, would inherit.
+`config/yam.yaml` keeps 0.15.
 
 ## Shutting down safely
 

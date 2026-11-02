@@ -207,6 +207,9 @@ class HomingBus(FakeBus):
         self.torque = False
 
 
+Z = np.zeros(6)
+
+
 class GelloHomeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.bus = HomingBus()
@@ -216,7 +219,7 @@ class GelloHomeTest(unittest.TestCase):
     def test_home_holds_present_pose_through_enable_then_sends_goal_and_releases(self) -> None:
         self.bus.deg["joint_1"] = -40.0
         self.bus.raw = 1500
-        err = self.t.home(0.0)
+        err = self.t.home(Z, 0.0)
         names = [e[0] for e in self.bus.log]
         self.assertEqual(names, ["Goal_Velocity", "Torque_Limit", "Goal_Position", "Goal_Position",
                                  "enable", "Goal_Position", "Goal_Position", "disable"])
@@ -228,24 +231,31 @@ class GelloHomeTest(unittest.TestCase):
         self.assertFalse(self.bus.torque)
         self.assertLess(err, 1.0)
 
+    def test_home_goal_maps_to_the_given_pose_and_gripper(self) -> None:
+        q = np.array([0.3, 0.2, 0.5, -0.25, 0.1, -0.4])
+        self.t.home(q, 0.5)
+        got, g = self.t.read()
+        np.testing.assert_allclose(got, q, atol=1e-9)
+        self.assertAlmostEqual(g, 0.5, delta=0.01)
+
     def test_home_goal_maps_to_yam_zero_and_the_given_gripper(self) -> None:
         self.bus.raw = 1500
-        self.t.home(0.0)
+        self.t.home(Z, 0.0)
         q, g = self.t.read()
         np.testing.assert_allclose(q, np.zeros(6), atol=1e-12)
         self.assertEqual(g, 0.0)
-        self.t.home(1.0)
+        self.t.home(Z, 1.0)
         self.assertAlmostEqual(self.t.read()[1], 1.0)
 
     def test_home_releases_torque_on_failure_and_on_timeout(self) -> None:
         self.bus.error = OSError("bus gone")
         with self.assertRaises(GelloInputError):
-            self.t.home(0.0)
+            self.t.home(Z, 0.0)
         self.assertFalse(self.bus.torque)
         self.bus.error = None
         self.bus.deg = {n: 0.0 for n in JOINTS}
         self.bus.sync_write = lambda *a, **kw: None  # a joint that never moves
-        self.assertGreater(self.t.home(0.0, timeout_s=0.1), 2.0)
+        self.assertGreater(self.t.home(Z, 0.0, timeout_s=0.1), 2.0)
         self.assertFalse(self.bus.torque)
 
 
