@@ -5,8 +5,7 @@
     ros2 run abc_bridge bridge --ros-args -p prompt:="..." -p record_dir:=$HOME/recordings
 
 Dry run (the default) does everything but publishes to /abc/preview/<arm>/... instead
-of the arm and gripper command topics, and never parks. The episode ends on Ctrl-C or
-once the commands have stayed still for IDLE_S.
+of the arm and gripper command topics, and never parks. The episode ends on Ctrl-C.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ import signal
 import subprocess
 import threading
 import time
-from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 
 import cv2
@@ -39,6 +37,8 @@ from sparklab_yam.constants import ARM_JOINTS, HANDS
 # ABC's deploy command: --execute-chunk-dim=16 --rtc-prefix-length=4 --rtc-inference-lead-steps=7
 CHUNK, PREFIX, LEAD = 16, 4, 7
 DT = 0.03333
+# (chunk_len, action_dim) of ABC's released checkpoints; the server's noise input.
+NOISE_SHAPE = (30, 14)
 # _DEFAULT_INIT_Q in ABC's deploy/robot/config.py, per arm, gripper last.
 START_POSE = np.array([0.0, 0.5, 1.0, -1.0, 0.0, 0.0, 1.0])
 RAMP_S = 5.0
@@ -46,8 +46,6 @@ STALE_S = 0.5
 # ABC camera name -> our camera id. ABC trained on 640x480 (4:3) everywhere.
 CAMERAS = {"top": "top", "left": "left_wrist", "right": "right_wrist"}
 IMAGE_HW = (480, 640)
-# Every executed command, gripper included, within IDLE_RAD over the last IDLE_S ends the episode.
-IDLE_S, IDLE_RAD = 5.0, 0.02
 
 
 def _pack(obj):
@@ -89,6 +87,9 @@ class Bridge(Node):
     prompt: task string; must match one the checkpoint trained on.
     dry_run: publish under /abc/preview instead of the command topics.
     record_dir: if set, the episode is recorded to <record_dir>/<time>_<prompt>/ as MCAP.
+    noise_seed: >= 0 sends fresh N(0, 1) flow-matching noise with each request, from this seed;
+        -1 sends none, so the server uses zeros.
+    start_pose: per-arm ramp target, 6 joints then gripper; defaults to ABC's START_POSE.
     """
 
     def __init__(self):
@@ -98,6 +99,11 @@ class Bridge(Node):
         self.prompt = self.declare_parameter("prompt", "").value
         self.dry_run = self.declare_parameter("dry_run", True).value
         self.record_dir = self.declare_parameter("record_dir", "").value
+        noise_seed = self.declare_parameter("noise_seed", -1).value
+        self._rng = np.random.default_rng(noise_seed) if noise_seed >= 0 else None
+        self.start_pose = np.array(self.declare_parameter("start_pose", START_POSE.tolist()).value)
+        if self.start_pose.shape != START_POSE.shape:
+            raise ValueError(f"start_pose needs {START_POSE.size} values per arm, got {self.start_pose.size}")
         if not self.prompt:
             raise ValueError("set -p prompt:=... to a task name the checkpoint trained on")
         self._state: dict[str, JointState] = {}
@@ -116,14 +122,14 @@ class Bridge(Node):
         self._obs_image_pubs = {k: self.create_publisher(Image, f"/abc/obs/images/{k}", 1)
                                 for k in CAMERAS}
         self._obs_pubs = {k: self.create_publisher(Float32MultiArray, f"/abc/obs/{k}", 10)
-                          for k in ("state", "action_prefix")}
+                          for k in ("state", "action_prefix", *(("noise",) if self._rng else ()))}
         self._prompt_pub = self.create_publisher(String, "/abc/obs/prompt", 10)
         self._actions_pub = self.create_publisher(Float32MultiArray, "/abc/actions", 10)
 
     def record_request(self, obs: dict) -> None:
-        """Publish a request exactly as sent: /abc/obs/{state,action_prefix,prompt,images/<cam>}.
+        """Publish a request exactly as sent: /abc/obs/{state,action_prefix,noise,prompt,images/<cam>}.
 
-        Images keep their camera's capture stamp, so publish time minus stamp is their age.
+        Images keep the camera node's publish stamp, so publish time minus stamp is their age.
         """
         for k, img in obs["images"].items():
             _, h, w = img.shape
@@ -142,13 +148,13 @@ class Bridge(Node):
     def start_recorder(self) -> subprocess.Popen:
         """Start `ros2 bag record` on the request, reply, joint and command topics.
 
-        Blocks until it subscribes to /abc/actions, so the first reply is in the bag.
+        Blocks until it subscribes to every /abc topic, so the first request and reply are in the bag.
         """
         name = time.strftime("%Y%m%d_%H%M%S_") + re.sub(r"\W+", "_", self.prompt).strip("_")
         out = os.path.join(os.path.expanduser(self.record_dir), name)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         topics = [*(f"/abc/obs/images/{k}" for k in CAMERAS), "/abc/actions",
-                  *(f"/abc/obs/{k}" for k in ("state", "action_prefix", "prompt"))]
+                  *(f"/abc/obs/{k}" for k in (*self._obs_pubs, "prompt"))]
         for h in HANDS:
             topics += [f"/{h}/joint_states", f"{self.ns}/{h}/arm/command", f"{self.ns}/{h}/gripper/command"]
         # Own session: the terminal's Ctrl-C must not stop it before the park is recorded.
@@ -157,7 +163,8 @@ class Bridge(Node):
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, start_new_session=True)
         deadline = time.monotonic() + 15.0
-        while self.count_subscribers("/abc/actions") == 0 and time.monotonic() < deadline:
+        while (any(self.count_subscribers(t) == 0 for t in topics if t.startswith("/abc/"))
+               and time.monotonic() < deadline):
             time.sleep(0.1)
         self.get_logger().info(f"recording to {out}")
         return proc
@@ -185,8 +192,11 @@ class Bridge(Node):
             raise RuntimeError(f"stale: {', '.join(missing)}")
         msgs = {k: self._images[c] for k, c in CAMERAS.items()}
         self._obs_stamps = {k: m.header.stamp for k, m in msgs.items()}
-        return {"state": self.state(), "prompt": self.prompt,
-                "images": {k: _to_abc_image(m) for k, m in msgs.items()}}
+        obs = {"state": self.state(), "prompt": self.prompt,
+               "images": {k: _to_abc_image(m) for k, m in msgs.items()}}
+        if self._rng is not None:
+            obs["noise"] = self._rng.standard_normal(NOISE_SHAPE, dtype=np.float32)
+        return obs
 
     def publish(self, action: np.ndarray) -> None:
         for i, h in enumerate(HANDS):
@@ -248,7 +258,7 @@ def first_action_check(state: np.ndarray, actions: np.ndarray) -> None:
 
 def ramp_to_start(bridge: Bridge) -> None:
     q0 = bridge.state()
-    q1 = np.tile(START_POSE, 2)
+    q1 = np.tile(bridge.start_pose, 2)
     n = int(RAMP_S / DT)
     t = time.monotonic()
     for i in range(1, n + 1):
@@ -260,9 +270,7 @@ def ramp_to_start(bridge: Bridge) -> None:
 
 def run_episode(bridge: Bridge, policy: Policy) -> None:
     """ABC's RTC loop (rtc_gym_env.py, policy_rollout.py): execute 16 of each 30-step chunk
-    at 30 Hz, sending the next request LEAD steps before the chunk ends.
-
-    Returns once the executed commands have stayed within IDLE_RAD for IDLE_S.
+    at 30 Hz, sending the next request LEAD steps before the chunk ends. Runs until Ctrl-C.
     """
     log = bridge.get_logger()
     obs = bridge.observation()
@@ -274,7 +282,6 @@ def run_episode(bridge: Bridge, policy: Policy) -> None:
     first_action_check(obs["state"], actions)
 
     n_chunks = n_late = 0
-    recent = deque(maxlen=int(IDLE_S / DT))
     t = time.monotonic()
     while True:
         for step, command in enumerate(actions):
@@ -285,7 +292,6 @@ def run_episode(bridge: Bridge, policy: Policy) -> None:
                 pending = policy.infer_async(obs)
             bridge.state()  # raises on a stale joint state
             bridge.publish(command)
-            recent.append(command)
             t += DT
             time.sleep(max(0.0, t - time.monotonic()))
         n_chunks += 1
@@ -301,9 +307,6 @@ def run_episode(bridge: Bridge, policy: Policy) -> None:
         log.info(f"chunk {n_chunks}: infer {seconds * 1e3:.0f} ms, "
                  f"boundary |dq| {np.abs(nxt[0] - actions[-1]).max():.3f} rad, late {n_late}")
         actions = nxt
-        if len(recent) == recent.maxlen and np.ptp(np.array(recent), axis=0).max() < IDLE_RAD:
-            log.info(f"commands still for {IDLE_S:.0f} s; ending the episode")
-            return
 
 
 def main() -> None:

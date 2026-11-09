@@ -26,17 +26,18 @@ ros2 run abc_bridge bridge --ros-args -p prompt:="throw plastic bottles in bin"
 | `dry_run` | `true` | publish to `/abc/preview/<arm>/{arm,gripper}/command` instead of the command topics, and never park |
 | `host`, `port` | `localhost`, `8000` | ABC's server |
 | `record_dir` | — | if set, record the episode to `<record_dir>/<time>_<prompt>/` as MCAP |
+| `noise_seed` | `-1` | `>= 0`: send a fresh (30, 14) N(0, 1) `noise` with each request, drawn from this seed. `-1`: send none; the server then uses zeros. See [`DESIGN.md`](../../DESIGN.md#the-abc-bridge) |
+| `start_pose` | ABC's | per-arm ramp target, 6 joints then gripper, e.g. `[0.,0.,0.,0.,0.,0.,1.]` (park, gripper open) for policies trained on our GELLO demos. See [`DESIGN.md`](../../DESIGN.md#the-abc-bridge) |
 
 With fast inference, the first request carrying `action_prefix` recompiles the
 model (several minutes, the server unresponsive meanwhile); send one before
 starting the bridge, or its first chunk waits that long.
 
-On start the bridge ramps both arms over 5 s to ABC's start pose,
-`[0, 0.5, 1.0, -1.0, 0, 0]` with the gripper open, asks for the first chunk,
+On start the bridge ramps both arms over 5 s to `start_pose` (default ABC's,
+`[0, 0.5, 1.0, -1.0, 0, 0]` with the gripper open), asks for the first chunk,
 prints each joint's first-action delta and waits for Enter. The episode ends
-on Ctrl-C, or once every executed command has stayed within 0.02 rad for 5 s;
-either way the bridge stops publishing and, unless dry-running, parks both
-arms. It stops if a joint state or image is older than 0.5 s.
+on Ctrl-C: the bridge stops publishing and, unless dry-running, parks both
+arms. It also stops if a joint state or image is older than 0.5 s.
 
 ## Mapping
 
@@ -73,7 +74,8 @@ Every request and reply is also published:
 
 | topic | type | |
 |---|---|---|
-| `/abc/obs/images/{top,left,right}` | `Image` `rgb8` | the 640x480 frames sent, after the crop; `header.stamp` is the camera's capture time, so record time minus stamp is the frame's age when sent |
+| `/abc/obs/images/{top,left,right}` | `Image` `rgb8` | the 640x480 frames sent, after the crop; `header.stamp` is the camera node's stamp (taken when it publishes the frame, after alignment), so record time minus stamp is the frame's age when sent, excluding sensor and USB latency |
 | `/abc/obs/state`, `/abc/obs/action_prefix` | `Float32MultiArray` | (14,) and (4, 14), as sent |
+| `/abc/obs/noise` | `Float32MultiArray` | (30, 14), as sent; only with `noise_seed >= 0` |
 | `/abc/obs/prompt` | `String` | the prompt sent |
 | `/abc/actions` | `Float32MultiArray` | the server's full (30, 14) reply; `actions[4:20]` are executed |

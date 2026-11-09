@@ -309,6 +309,18 @@ their BEHAVIOR category's average, not the files' 1 kg.
   0 closed .. 1 open as i2rt's normalisation here.
 - **Top camera is cropped to 4:3** so it matches ABC's RealSense stations'
   640x480. The D435's vertical FOV (43°) still can't reach ABC's D405 (58°).
+- **`noise_seed`**: ABC's server uses zero flow-matching noise when the client
+  sends none, as all of ABC's real-robot clients do; its sim eval sends fresh
+  N(0, 1) noise per request. On 8 recorded slow VLA requests, zero noise gave
+  the slowest chunk (0.0006–0.002 rad/step vs ~0.025 acting) and never acted,
+  while 1–15 of 50 random draws acted, with either arm. With zeros a slow
+  episode stays slow until its inputs change; fresh noise gives each request a
+  chance to break out. Default stays -1 (zeros) so earlier recordings remain
+  comparable.
+- **`start_pose`** lets the bridge drive LeRobot policies trained on our GELLO
+  demos (served over the same protocol from `~/abc_test/yam_bottle/deploy/`).
+  Those demos start near park (first-frame j2 0.01, j3 0.03 rad, gripper
+  ~0.85), not at ABC's start pose, which they never saw.
 - **Dry run never parks**: it never moved the arms, and parking would move real
   ones if the real drivers are up.
 - **Recording starts after the ramp, not at Enter.** The first chunk is requested
