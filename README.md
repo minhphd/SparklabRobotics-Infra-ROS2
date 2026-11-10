@@ -64,6 +64,7 @@ Only one thing drives the arms at a time: the teleop node *or* a LeRobot process
 | [`src/sparklab_quest`](src/sparklab_quest/README.md) | the headset: bridge node, web page, controller input | `bridge.py` |
 | [`src/sparklab_cameras`](src/sparklab_cameras/README.md) | the cameras: publisher node and setup tools | `node.py` |
 | [`src/lerobot_robot_sparklab`](src/lerobot_robot_sparklab/README.md) | LeRobot plugin: robot, teleoperator, recording, live rollout, harness | `follower.py` |
+| [`src/abc_bridge`](src/abc_bridge/README.md) | runs ABC's released policy: a client of ABC's websocket policy server | `node.py` |
 | [`src/capx_sparklab`](src/capx_sparklab/README.md) | cap-x's agent tools on both arms: an LLM writes Python against perceive / grasp / move / hand-over tools | `api.py`, `env.py` |
 | [`src/coding_agent_sparklab`](src/coding_agent_sparklab/README.md) | a web page to chat with Claude Code or Antigravity while it drives both arms through joint-level Python functions | `robot.py`, `agents.py` |
 | [`src/sparklab_sim`](src/sparklab_sim/README.md) | Isaac Sim digital twin: the rig's ROS 2 interface on its own domain, from Isaac's own Python | `twin.py`, `policy_server.py` |
@@ -92,6 +93,7 @@ under [`scripts/capx_python.sh`](scripts/capx_python.sh), next to cap-x's GPU st
 | `/cameras/<id>/{color,depth}/camera_info` | `CameraInfo` | camera intrinsics |
 | `/cameras/<id>/points` | `PointCloud2` | colour point cloud in the camera's frame, ≤ 10 Hz, only while something subscribes |
 | `/tf`, `/tf_static` | `TFMessage` | where every arm and camera is — see [the 3D view](#the-3d-view) |
+| `/abc/preview/<arm>/arm/command`, `/abc/preview/<arm>/gripper/command` | `Float64MultiArray`, `Float64` | what `abc_bridge` would command, in dry run |
 | `/rollout/task` | `String` | give a running policy a new task |
 | `/rollout/status`, `/rollout/state`, `/rollout/images/<cam>/compressed` | `String`, `JointState`, `CompressedImage` | what the running policy sees |
 
