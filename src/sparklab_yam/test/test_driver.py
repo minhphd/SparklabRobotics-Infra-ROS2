@@ -152,6 +152,40 @@ def test_a_ramp_never_leads_a_stalled_arm_by_more_than_max_step():
     assert warnings and not driver._ramping
 
 
+class _LiveArray:
+    """Like i2rt's MotorChainRobot, get_joint_pos hands out its live array, replaced on update."""
+
+    def __init__(self):
+        self.pos = np.zeros(7)
+        self.sent = []
+
+    def get_joint_pos(self):
+        return self.pos
+
+    def command_joint_pos(self, q):
+        self.sent.append(np.array(q))
+        self.pos = np.array(q)
+
+
+def test_the_start_ramp_begins_where_the_arm_is_when_the_robot_hands_out_its_live_array(monkeypatch):
+    rest = np.array([0.0, 0.5, 1.0, -1.0, 0.0, 0.0])
+    monkeypatch.setattr(sparklab_yam.driver, "DEFAULT_Q_REST", rest)
+    robot = _LiveArray()
+    first = robot.pos
+    logged = []
+    driver = SimpleNamespace(
+        _max_step=np.asarray(DEFAULT_MAX_RELATIVE_TARGET), _ramp_lock=threading.Lock(), _lock=threading.Lock(),
+        _zero_gravity=False, _ramping=False, _robot=robot, _command=robot.command_joint_pos, _park_s=0.2,
+        _cmd=np.zeros(7), _alive=lambda: True,
+        get_logger=lambda: SimpleNamespace(info=logged.append, warning=logged.append))
+    driver._ramp = lambda target: YamDriver._ramp(driver, target)
+    YamDriver._ramp_to_rest(driver)
+    # SimRobot copies, so only this stand-in shows the rig's failure: the start taken as the target.
+    assert np.all(first == 0.0)
+    assert np.max(np.abs(robot.sent[0][:6])) < 0.01
+    np.testing.assert_allclose(robot.sent[-1][:6], rest)
+
+
 def _call(probe, srv_type, name, request):
     future = probe.create_client(srv_type, name).call_async(request)
     deadline = time.monotonic() + 5.0

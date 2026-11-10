@@ -58,15 +58,19 @@ can ramp its arm to the rest pose when it starts, so every session begins from
 the same pose, ready for teleop. The startup ramp and park share one lock: a
 park asked for mid-ramp waits for it rather than interleaving its commands.
 
-**Ramps lead the arm by at most `max_step`.** The first startup ramp on the rig
-(2026-11-10) commanded its waypoints open-loop: the folded arms sat still, then
-jumped to the rest pose. The driver's own ramps were the one path that skipped
-the `max_step` clamp every client command gets, so a stalled joint let the
-target run up to 1 rad ahead. Now each ramp command is clamped to `max_step`
-from the measured pose, eased in and out at 100 Hz, and the ramp runs until the
-arm arrives or twice `park_duration_s` passes. Why the arms stalled is not known:
-no joint states were recorded. So `rest_on_start` stays off until someone has
-watched the clamped ramp on the rig.
+**Ramps lead the arm by at most `max_step`.** The driver's own ramps were the one
+path that skipped the `max_step` clamp every client command gets; now each ramp
+command is clamped to `max_step` from the measured pose, eased in and out at
+100 Hz, and the ramp runs until the arm arrives or twice `park_duration_s` passes.
+
+**i2rt hands out its live joint array.** `MotorChainRobot.get_joint_pos()` returns
+its own state array, not a copy, and `np.asarray` does not copy it either. The
+startup ramp wrote the rest pose into that array for its target, so its start,
+read a moment later, was often the target too, and it commanded the target from
+the first tick. On the rig (2026-11-10) the arms first jumped there; with the
+clamp, a bag showed both reaching the rest pose in about 0.65 s at up to 3 rad/s,
+against a 10 s ramp. i2rt's `SimRobot` returns a copy, so no simulated test saw it.
+The driver now copies wherever it keeps or edits that array.
 
 ## Teleoperation
 

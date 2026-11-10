@@ -91,7 +91,8 @@ class YamDriver(Node):
         self._held_gains = None  # (kp, kd, gravity factor) to restore after zero gravity
         self._dead_logged = False
         self._last_clamp_warn = 0.0
-        self._cmd = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        # A copy: i2rt hands out its live joint-state array, and _cmd is edited in place.
+        self._cmd = np.array(self._robot.get_joint_pos(), dtype=float)
         self.get_logger().info(
             f"pose at startup: {np.round(self._cmd[:ARM_JOINTS], 3).tolist()} (park target is zero)")
 
@@ -213,7 +214,7 @@ class YamDriver(Node):
                     self._set_floating(False)
             self._ramping = True
             try:
-                start = np.asarray(self._robot.get_joint_pos(), dtype=float)
+                start = np.array(self._robot.get_joint_pos(), dtype=float)
                 t0 = time.monotonic()
                 while True:
                     a = min(1.0, (time.monotonic() - t0) / self._park_s)
@@ -249,7 +250,8 @@ class YamDriver(Node):
         """Ramp the arm to the rest pose, the gripper staying where it homed."""
         if not self._alive():
             return
-        target = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        # A copy: writing into i2rt's live array made the ramp's start the target, a sprint on the rig.
+        target = np.array(self._robot.get_joint_pos(), dtype=float)
         target[:ARM_JOINTS] = DEFAULT_Q_REST
         self.get_logger().info(f"ramping to the rest pose {DEFAULT_Q_REST.tolist()} over "
                                f"{self._park_s:.1f}s; commands are ignored until it is there")
@@ -275,7 +277,7 @@ class YamDriver(Node):
             kp, kd, self._robot.gravity_comp_factor = self._held_gains
             self._robot.update_kp_kd(kp, kd)
         # update_kp_kd only stores gains; commanding the present pose applies them.
-        self._cmd = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        self._cmd = np.array(self._robot.get_joint_pos(), dtype=float)
         self._command(self._cmd.copy())
         self._zero_gravity = on
 
