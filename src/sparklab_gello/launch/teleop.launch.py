@@ -33,12 +33,12 @@ def generate_launch_description() -> LaunchDescription:
     max_step = [0.133, 0.133, 0.133, 0.15, 0.3, 0.3]
     nodes = []
     for side, (name, serial, calibration, mapping) in LEADERS.items():
-        # Parking runs after SIGINT and takes park_duration_s; launch's default 5 s
-        # before escalating to SIGTERM would cut it short.
+        # Parking runs after SIGINT and takes park_duration_s, twice that if the arm lags;
+        # launch's default 5 s before escalating to SIGTERM would cut it short.
         nodes.append(Node(package="sparklab_yam", executable="driver", name="yam_driver",
                           namespace=side,
                           parameters=[params, {"sim": sim, "viewer": viewer, "max_step": max_step}],
-                          sigterm_timeout="20"))
+                          sigterm_timeout="30"))
         nodes.append(Node(package="sparklab_gello", executable="gello", name=name, parameters=[{
             "arm": side,
             "port": f"/dev/serial/by-id/usb-1a86_USB_Single_Serial_{serial}-if00",

@@ -323,8 +323,9 @@ i2rt's kp, which every other client of the driver, ABC included, would inherit.
 **Signals.** By default, Ctrl-C makes rclpy shut ROS down immediately — after
 which the teleop can't send the arms home and LeRobot can't ask the drivers to
 park. So every process here handles Ctrl-C itself and ignores a second Ctrl-C
-while parking. The launch file gives the drivers 20 s (instead of 5) before
-escalating, because parking takes 5 s. A background job starts with Ctrl-C
+while parking. The launch files give the drivers 30 s (instead of 5) before
+escalating, because parking takes `park_duration_s` (10 s on the rig) and up to
+twice that when an arm lags its ramp. A background job starts with Ctrl-C
 ignored, so the nodes re-enable it explicitly.
 
 **Background spinning.** In Humble, shutting an executor down while another

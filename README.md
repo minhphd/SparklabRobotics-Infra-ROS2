@@ -72,7 +72,7 @@ Only one thing drives the arms at a time: the teleop node *or* a LeRobot process
 | [`scripts/`](scripts/README.md) | everyday commands and policy-debugging tools | `rollout.sh` |
 | [`archive/`](archive/README.md) | retired code kept for reference: the decoupled IK | |
 
-The first six are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
+The first eight are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
 under [`scripts/capx_python.sh`](scripts/capx_python.sh), next to cap-x's GPU stack.
 
 ## Topics

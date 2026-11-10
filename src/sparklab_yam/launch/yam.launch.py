@@ -42,12 +42,12 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("certfile", default_value=str(Path.cwd() / "cert.pem")),
         DeclareLaunchArgument("keyfile", default_value=str(Path.cwd() / "key.pem")),
     ]
-    # Parking runs after SIGINT and takes park_duration_s; launch's default 5 s
-    # before escalating to SIGTERM would cut it short.
+    # Parking runs after SIGINT and takes park_duration_s, twice that if the arm lags;
+    # launch's default 5 s before escalating to SIGTERM would cut it short.
     drivers = [
         Node(package="sparklab_yam", executable="driver", name="yam_driver", namespace=side,
              parameters=[params, {"sim": arg("sim"), "viewer": arg("viewer")}],
-             sigterm_timeout="20")
+             sigterm_timeout="30")
         for side in ("left", "right")
     ]
     static_tf = [_static_tf(t) for t in yaml.safe_load((config / "extrinsics.yaml").read_text())["transforms"]]
