@@ -14,7 +14,8 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>sparklab_yam</exec_depend>
-  <!-- pip, no rosdep key: msgpack, websockets -->
+  <!-- pip, no rosdep key: msgpack, websockets; record_dir also needs rosbag2_storage_mcap -->
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

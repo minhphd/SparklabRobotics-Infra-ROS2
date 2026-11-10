@@ -43,6 +43,9 @@ NOISE_SHAPE = (30, 14)
 START_POSE = np.array([0.0, 0.5, 1.0, -1.0, 0.0, 0.0, 1.0])
 RAMP_S = 5.0
 STALE_S = 0.5
+MAX_LEAD = 0.5
+"""rad a target may lie from the measured joint before the episode stops; first_action_check warns at it too."""
+ARM_DIMS = [i for i in range(2 * (ARM_JOINTS + 1)) if i % (ARM_JOINTS + 1) != ARM_JOINTS]
 # ABC camera name -> our camera id. ABC trained on 640x480 (4:3) everywhere.
 CAMERAS = {"top": "top", "left": "left_wrist", "right": "right_wrist"}
 IMAGE_HW = (480, 640)
@@ -164,8 +167,14 @@ class Bridge(Node):
                                 stderr=subprocess.DEVNULL, start_new_session=True)
         deadline = time.monotonic() + 15.0
         while (any(self.count_subscribers(t) == 0 for t in topics if t.startswith("/abc/"))
-               and time.monotonic() < deadline):
+               and proc.poll() is None and time.monotonic() < deadline):
             time.sleep(0.1)
+        if proc.poll() is not None:
+            raise RuntimeError(f"ros2 bag record exited with code {proc.returncode}: is its mcap storage "
+                               "plugin (rosbag2_storage_mcap) installed?")
+        if any(self.count_subscribers(t) == 0 for t in topics if t.startswith("/abc/")):
+            proc.kill()
+            raise RuntimeError("ros2 bag record did not subscribe to every /abc topic within 15 s")
         self.get_logger().info(f"recording to {out}")
         return proc
 
@@ -251,8 +260,8 @@ def first_action_check(state: np.ndarray, actions: np.ndarray) -> None:
         print(f"{name:<8}{s:>+10.4f}{a:>+11.4f}{d:>+9.4f}")
     worst = np.abs(delta).max()
     print(f"max |delta| {worst:.4f} rad ({np.degrees(worst):.1f} deg)")
-    if worst > 0.5:
-        print(f"*** WARNING: large first-step delta ({worst:.3f} rad) ***")
+    if worst > MAX_LEAD:
+        print(f"*** WARNING: large first-step delta ({worst:.3f} rad); the episode will stop on it ***")
     input("Press ENTER to execute, or Ctrl-C to abort > ")
 
 
@@ -290,7 +299,12 @@ def run_episode(bridge: Bridge, policy: Policy) -> None:
                 obs.update(action_prefix=actions[-PREFIX:], prefix_length=PREFIX)
                 bridge.record_request(obs)
                 pending = policy.infer_async(obs)
-            bridge.state()  # raises on a stale joint state
+            lead = np.abs(command - bridge.state())[ARM_DIMS]  # state() raises on a stale joint state
+            if lead.max() > MAX_LEAD:
+                d = ARM_DIMS[int(lead.argmax())]
+                arm, joint = HANDS[d // (ARM_JOINTS + 1)], d % (ARM_JOINTS + 1) + 1
+                raise RuntimeError(f"policy target {lead.max():.2f} rad from the measured {arm} joint {joint}; "
+                                   "stopping")
             bridge.publish(command)
             t += DT
             time.sleep(max(0.0, t - time.monotonic()))

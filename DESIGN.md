@@ -358,6 +358,10 @@ their BEHAVIOR category's average, not the files' 1 kg.
   ~0.85), not at ABC's start pose, which they never saw.
 - **Dry run never parks**: it never moved the arms, and parking would move real
   ones if the real drivers are up.
+- **A target 0.5 rad from the measured joint stops the episode.** Acting steps
+  move about 0.025 rad, so a lead that large means the policy has diverged or
+  the arm is blocked; the driver's `max_step` clamp alone would still let a
+  30 Hz stream drive a joint at about 4 rad/s.
 - **Recording starts after the ramp, not at Enter.** The first chunk is requested
   before the operator confirms it; starting later would lose the first
   input/output pair. The recorder runs in its own session so Ctrl-C reaches

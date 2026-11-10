@@ -37,7 +37,12 @@ On start the bridge ramps both arms over 5 s to `start_pose` (default ABC's,
 `[0, 0.5, 1.0, -1.0, 0, 0]` with the gripper open), asks for the first chunk,
 prints each joint's first-action delta and waits for Enter. The episode ends
 on Ctrl-C: the bridge stops publishing and, unless dry-running, parks both
-arms. It also stops if a joint state or image is older than 0.5 s.
+arms. It also stops, and parks, if a joint state or image is older than 0.5 s
+or a target for any arm joint lies more than 0.5 rad from where that joint
+measures, the first action included.
+
+Start it after the drivers log "at the rest pose": during their startup ramp
+they ignore commands, so the bridge's own ramp would be dropped.
 
 ## Mapping
 
@@ -69,6 +74,9 @@ With `record_dir` set, the bridge runs `ros2 bag record` itself: from the end
 of the ramp, so the first request and reply are in the bag, until the arms
 have parked. Each episode gets its own folder. Recorded alongside the topics
 below: `/<arm>/joint_states` and the command topics the bridge publishes to.
+If `ros2 bag record` exits or does not subscribe within 15 s (its MCAP plugin,
+`rosbag2_storage_mcap`, missing for one), the bridge stops and parks rather
+than run unrecorded.
 
 Every request and reply is also published:
 
