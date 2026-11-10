@@ -13,9 +13,10 @@ from std_msgs.msg import Float64, Float64MultiArray
 from std_srvs.srv import Trigger
 
 from sparklab_gello.guard import DISARMED, FAULT, GuardLimits
-from sparklab_gello.node import GelloNode
+from sparklab_gello.node import GelloNode, settled_state
 from sparklab_gello.reader import GelloInputError
 from sparklab_yam.driver import JOINT_NAMES, YamDriver
+from sparklab_yam.model.kinematics import DEFAULT_Q_REST
 
 POSE = np.array([0.1, 0.5, 0.6, -0.2, 0.3, -0.4, 0.2])
 
@@ -210,3 +211,26 @@ def test_end_to_end_with_the_sim_driver():
         assert qpos[6] > 0.0 and qpos[7] == pytest.approx(qpos[6])
     finally:
         r.close()
+
+
+def test_homing_waits_for_the_drivers_startup_ramp_to_finish():
+    rclpy.init(args=["--ros-args", "-r", "__ns:=/left", "-p", "sim:=true", "-p", "park_on_exit:=false",
+                     "-p", "rest_on_start:=true", "-p", "park_duration_s:=1.0"])
+    # The probe stays off the executor: wait_for_message reads it with its own wait set.
+    driver, probe = YamDriver(), Node("probe")
+    executor = MultiThreadedExecutor()
+    executor.add_node(driver)
+    stop = threading.Event()
+    thread = threading.Thread(target=lambda: [executor.spin_once(timeout_sec=0.05) for _ in iter(stop.is_set, True)])
+    thread.start()
+    try:
+        state = settled_state(probe, "/left/joint_states")
+        np.testing.assert_allclose(state.position[:6], DEFAULT_Q_REST, atol=0.03)
+    finally:
+        stop.set()
+        thread.join()
+        executor.shutdown()
+        driver.close()
+        for n in (driver, probe):
+            n.destroy_node()
+        rclpy.try_shutdown()

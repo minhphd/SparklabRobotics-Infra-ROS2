@@ -1,10 +1,10 @@
-"""Command latch for one arm: DISARMED / ARMED / FAULT, held inside ``arm_server``.
+"""Command latch for one arm: DISARMED / ARMED / FAULT, kept by the GELLO node.
 
 Only ARMED forwards targets, rate-limited in time. Any other state answers with a
 hold target fixed at the measured pose when the state was entered, so neither a
 late command nor a reconnecting client can resume motion: leaving DISARMED/FAULT
 takes an explicit arm request, then a command that matches the measured pose. No
-hardware dependency; ``arm_server`` applies the targets it returns.
+hardware dependency; the node publishes the targets it returns.
 
 Hold means "keep commanding the pose measured at the transition", which stops
 motion only while the low-level control loop is alive and its readings valid.

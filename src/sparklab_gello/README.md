@@ -44,7 +44,7 @@ and, in sim, `state_timeout_s` to 0.5 s. Ctrl-C parks both arms.
 
 On start-up the node drives the leader to the pose that maps to the arm's measured pose and the
 lever to the arm's measured gripper, at ~26 deg/s and half torque, then releases them: keep hands off it until
-`leader homed and released` is logged. `~/arm` then passes without posing by hand. The arm's driver must be running first. `-p home:=false` skips this. See
+`leader homed and released` is logged. `~/arm` then passes without posing by hand. The arm's driver must be running first; the node homes only once the arm has held still for 1 s, after the driver's startup ramp to the rest pose, and gives up after 30 s. `-p home:=false` skips this. See
 [`DESIGN.md`](../../DESIGN.md#homing-the-leader).
 
 Before `~/arm`, pose the leader like the arm: the request is refused, naming

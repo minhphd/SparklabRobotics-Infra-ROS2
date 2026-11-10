@@ -32,10 +32,35 @@ from std_srvs.srv import Trigger
 from sparklab_yam.constants import ARM_JOINTS, HANDS
 from sparklab_yam.run import run
 
-from .guard import ARMED, FAULT, ArmGuard, GuardLimits
+from .guard import ARMED, ArmGuard, GuardLimits
 from .reader import GelloInputError, GelloReader
 
 ARM_TIMEOUT_S = 1.0
+SETTLE_S, SETTLE_RAD, SETTLE_TIMEOUT_S = 1.0, 0.003, 30.0
+
+
+def settled_state(node: Node, topic: str) -> JointState:
+    """The arm's joint state once its joints have held within SETTLE_RAD for SETTLE_S.
+
+    Homing to it, not to the first message, keeps the leader off a pose the arm is
+    still leaving, as during the driver's startup ramp to the rest pose.
+    """
+    ok, state = wait_for_message(JointState, node, topic, time_to_wait=15.0)
+    if not ok:
+        raise RuntimeError(f"no {topic} to home to; start the driver first, or pass -p home:=false")
+    anchor, since = np.asarray(state.position[:ARM_JOINTS]), time.monotonic()
+    deadline = since + SETTLE_TIMEOUT_S
+    while time.monotonic() - since < SETTLE_S:
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"{topic} still moving after {SETTLE_TIMEOUT_S:.0f} s; nothing to home to")
+        time.sleep(0.1)
+        ok, state = wait_for_message(JointState, node, topic, time_to_wait=1.0)
+        if not ok:
+            raise RuntimeError(f"{topic} went silent while waiting for the arm to hold still")
+        q = np.asarray(state.position[:ARM_JOINTS])
+        if np.max(np.abs(q - anchor)) > SETTLE_RAD:
+            anchor, since = q, time.monotonic()
+    return state
 
 
 class GelloNode(Node):
@@ -66,11 +91,8 @@ class GelloNode(Node):
             port = reader.connect()
             self.get_logger().info(f"GELLO on {port} ({reader.calibration_path.name})")
             if self.declare_parameter("home", True).value:
-                ok, state = wait_for_message(JointState, self, f"/{self._arm}/joint_states",
-                                             time_to_wait=15.0)
-                if not ok:
-                    raise RuntimeError(f"no /{self._arm}/joint_states to home to; start the "
-                                       "driver first, or pass -p home:=false")
+                self.get_logger().info("waiting for the arm to hold still before homing the leader")
+                state = settled_state(self, f"/{self._arm}/joint_states")
                 q = np.asarray(state.position[:ARM_JOINTS], dtype=float)
                 gripper = state.position[ARM_JOINTS]
                 self.get_logger().warning(f"homing the leader to the arm's pose "
