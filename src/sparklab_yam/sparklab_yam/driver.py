@@ -16,8 +16,10 @@ Topics are relative to the namespace (one arm per namespace):
                                             false: hold where it is
 
 Every arm command is clamped to ``max_step`` from the measured pose. A dead
-control loop stops joint_states, which is how clients detect it. On SIGINT or
-SIGTERM the arm parks before torque is cut, unless ``park_on_exit`` is false.
+control loop stops joint_states, which is how clients detect it. With
+``rest_on_start`` the arm ramps to the rest pose (DEFAULT_Q_REST) on start,
+ignoring commands until it is there. On SIGINT or SIGTERM the arm parks before
+torque is cut, unless ``park_on_exit`` is false.
 """
 
 from __future__ import annotations
@@ -37,10 +39,14 @@ from std_srvs.srv import SetBool, Trigger
 from tf2_ros import TransformBroadcaster
 
 from .constants import ARM_JOINTS, DEFAULT_MAX_RELATIVE_TARGET
-from .ik.decoupled_ik import DecoupledIKSolver
+from .ik.solver import IKSolver
+from .model.kinematics import DEFAULT_Q_REST
 from .run import run
 
 JOINT_NAMES = [f"joint_{j}" for j in range(1, ARM_JOINTS + 1)] + ["gripper"]
+RAMP_DT = 0.01
+RAMP_TOL = 0.03
+"""rad from its target at which a park or startup ramp counts the arm as there."""
 
 
 class YamDriver(Node):
@@ -53,6 +59,7 @@ class YamDriver(Node):
             "max_step", list(DEFAULT_MAX_RELATIVE_TARGET)).value, dtype=float)
         self._park_s = self.declare_parameter("park_duration_s", 5.0).value
         self._park_on_exit = self.declare_parameter("park_on_exit", True).value
+        rest_on_start = self.declare_parameter("rest_on_start", False).value
         # Recovery re-asserts the pre-error target at full gains from inside
         # i2rt, which max_step cannot see or bound: it trades a stop for a snap.
         auto_recovery = self.declare_parameter("enable_auto_recovery", False).value
@@ -76,7 +83,9 @@ class YamDriver(Node):
             gravity_comp_factor=np.asarray(gravity, dtype=float), ee_mass=ee_mass or None,
             **({"enable_auto_recovery": True} if auto_recovery else {}))
         self._lock = threading.Lock()
-        self._parking = False
+        # Held for a whole ramp, so a park asked for mid-ramp waits instead of fighting it.
+        self._ramp_lock = threading.Lock()
+        self._ramping = False
         self._zero_gravity = False
         self._held_gains = None  # (kp, kd, gravity factor) to restore after zero gravity
         self._dead_logged = False
@@ -85,7 +94,7 @@ class YamDriver(Node):
         self.get_logger().info(
             f"pose at startup: {np.round(self._cmd[:ARM_JOINTS], 3).tolist()} (park target is zero)")
 
-        self._fk = DecoupledIKSolver()
+        self._fk = IKSolver()
         arm = self.get_namespace().strip("/") or "arm"
         self._frame_id, self._tool_frame = f"{arm}_base", f"{arm}_tool0"
         self._tf = TransformBroadcaster(self)
@@ -105,6 +114,8 @@ class YamDriver(Node):
             import mujoco.viewer
             self._viewer = mujoco.viewer.launch_passive(self._robot._model, self._robot._data)
             self.create_timer(1.0 / 60.0, self._sync_viewer, callback_group=group)
+        if rest_on_start:
+            threading.Thread(target=self._ramp_to_rest, daemon=True).start()
 
     def _alive(self) -> bool:
         """False once i2rt's control loop has died; SimRobots have no chain."""
@@ -156,7 +167,7 @@ class YamDriver(Node):
             self.get_logger().error(f"arm/command needs {ARM_JOINTS} values, got {len(target)}")
             return
         with self._lock:
-            if self._parking or self._zero_gravity or not self._alive():
+            if self._ramping or self._zero_gravity or not self._alive():
                 return
             present = np.asarray(self._robot.get_joint_pos(), dtype=float)[:ARM_JOINTS]
             step = target - present
@@ -172,33 +183,68 @@ class YamDriver(Node):
 
     def _on_gripper(self, msg: Float64) -> None:
         with self._lock:
-            if self._parking or self._zero_gravity or not self._alive():
+            if self._ramping or self._zero_gravity or not self._alive():
                 return
             self._cmd[ARM_JOINTS] = float(np.clip(msg.data, 0.0, 1.0))
             self._robot.command_joint_pos(self._cmd.copy())
 
     # ---- parking ----------------------------------------------------------
+    def _ramp(self, target: np.ndarray) -> bool:
+        """Ease every joint, gripper included, to target over park_duration_s, ignoring commands.
+
+        Each command leads the measured pose by at most max_step, as client commands do, so
+        an arm that stalls is never commanded far ahead of itself. See DESIGN.md#the-arm-drivers.
+        Returns: whether the arm joints got within RAMP_TOL of target by twice park_duration_s.
+        """
+        lead = np.append(self._max_step, np.inf)
+        with self._ramp_lock:
+            with self._lock:
+                if self._zero_gravity:
+                    self._set_floating(False)
+            self._ramping = True
+            try:
+                start = np.asarray(self._robot.get_joint_pos(), dtype=float)
+                t0 = time.monotonic()
+                while True:
+                    a = min(1.0, (time.monotonic() - t0) / self._park_s)
+                    a = a * a * (3.0 - 2.0 * a)
+                    present = np.asarray(self._robot.get_joint_pos(), dtype=float)
+                    command = present + np.clip((1.0 - a) * start + a * target - present, -lead, lead)
+                    self._robot.command_joint_pos(command)
+                    arrived = a == 1.0 and np.max(np.abs(present - target)[:ARM_JOINTS]) < RAMP_TOL
+                    if arrived or time.monotonic() - t0 > 2 * self._park_s:
+                        break
+                    time.sleep(RAMP_DT)
+                with self._lock:
+                    self._cmd = command
+            finally:
+                self._ramping = False
+        if not arrived:
+            self.get_logger().warning(
+                f"ramp stopped short of {np.round(target[:ARM_JOINTS], 3).tolist()} at "
+                f"{np.round(present[:ARM_JOINTS], 3).tolist()} — blocked, or too weak to get there")
+        return arrived
+
     def _park(self) -> bool:
-        """Ramp every joint, gripper included, to zero — the folded rest pose."""
+        """Ramp every joint, gripper included, to zero — the folded park pose."""
         if not self._alive():
             self.get_logger().warning(
                 "control loop is dead — cannot park; the arm drops when torque is cut")
             return False
         self.get_logger().info(f"parking: ramping to zero over {self._park_s:.1f}s")
-        with self._lock:
-            if self._zero_gravity:
-                self._set_floating(False)
-        self._parking = True
-        try:
-            start = np.asarray(self._robot.get_joint_pos(), dtype=float)
-            for a in np.linspace(0.0, 1.0, 51):
-                self._robot.command_joint_pos((1.0 - a) * start)
-                time.sleep(self._park_s / 50)
-            with self._lock:
-                self._cmd[:] = 0.0
-        finally:
-            self._parking = False
+        self._ramp(np.zeros_like(self._cmd))
         return True
+
+    def _ramp_to_rest(self) -> None:
+        """Ramp the arm to the rest pose, the gripper staying where it homed."""
+        if not self._alive():
+            return
+        target = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        target[:ARM_JOINTS] = DEFAULT_Q_REST
+        self.get_logger().info(f"ramping to the rest pose {DEFAULT_Q_REST.tolist()} over "
+                               f"{self._park_s:.1f}s; commands are ignored until it is there")
+        if self._ramp(target):
+            self.get_logger().info("at the rest pose")
 
     def _set_floating(self, on: bool) -> None:
         """Arm joints to zero stiffness under the floating gravity factor, or back.

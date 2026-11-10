@@ -65,10 +65,12 @@ Only one thing drives the arms at a time: the teleop node *or* a LeRobot process
 | [`src/sparklab_cameras`](src/sparklab_cameras/README.md) | the cameras: publisher node and setup tools | `node.py` |
 | [`src/lerobot_robot_sparklab`](src/lerobot_robot_sparklab/README.md) | LeRobot plugin: robot, teleoperator, recording, live rollout, harness | `follower.py` |
 | [`src/capx_sparklab`](src/capx_sparklab/README.md) | cap-x's agent tools on both arms: an LLM writes Python against perceive / grasp / move / hand-over tools | `api.py`, `env.py` |
+| [`src/coding_agent_sparklab`](src/coding_agent_sparklab/README.md) | a web page to chat with Claude Code or Antigravity while it drives both arms through joint-level Python functions | `robot.py`, `agents.py` |
 | [`src/sparklab_sim`](src/sparklab_sim/README.md) | Isaac Sim digital twin: the rig's ROS 2 interface on its own domain, from Isaac's own Python | `twin.py`, `policy_server.py` |
 | [`scripts/`](scripts/README.md) | everyday commands and policy-debugging tools | `rollout.sh` |
+| [`archive/`](archive/README.md) | retired code kept for reference: the decoupled IK | |
 
-The first five are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
+The first six are ROS 2 packages, built together with `colcon`; `capx_sparklab` runs
 under [`scripts/capx_python.sh`](scripts/capx_python.sh), next to cap-x's GPU stack.
 
 ## Topics
@@ -100,7 +102,7 @@ Foxglove's *Service Call* panel. `ros2 service list -t` shows what is up right n
 
 | service | type | what it does |
 |---|---|---|
-| `/left/park`, `/right/park` | `std_srvs/srv/Trigger` | slowly fold that arm to the all-zeros rest pose (5 s) and hold it there; returns when done; also ends zero gravity |
+| `/left/park`, `/right/park` | `std_srvs/srv/Trigger` | slowly fold that arm to the all-zeros park pose (5 s) and hold it there; returns when done; also ends zero gravity |
 | `/left/zero_gravity`, `/right/zero_gravity` | `std_srvs/srv/SetBool` | `true`: the arm floats and you move it by hand (commands are ignored; the gripper keeps holding); `false`: hold where it is. Tuning: [`sparklab_yam`](src/sparklab_yam/README.md#the-driver) |
 | `/rollout/reset` | `std_srvs/srv/Trigger` | send the arms home, drop queued actions, wait for a new task |
 | `/rollout/home` | `std_srvs/srv/Trigger` | send the arms home and wait |
@@ -170,7 +172,9 @@ ros2 launch sparklab_yam yam.launch.py teleop:=true     # ...and drive the arms 
 ros2 launch sparklab_yam yam.launch.py sim:=true viewer:=true cameras:=false   # no hardware
 ```
 
-Ctrl-C folds both arms to the rest pose before turning the motors off. On the
+Ctrl-C folds both arms to the park pose (all zeros) before turning the motors
+off. With `rest_on_start: true` in `config/yam.yaml` they ramp to the rest pose
+`[0, 0.5, 1.0, -1.0, 0, 0]` on start. On the
 headset, open the URL the bridge prints (`https://<this-machine>:8443/`).
 
 | to... | run (with the robot started, without `teleop:=true`) |
@@ -181,6 +185,7 @@ headset, open the URL the bridge prints (`https://<this-machine>:8443/`).
 | change the policy's task while it runs | `./scripts/rollout.sh --mode=live`, then `ros2 topic pub --once /rollout/task std_msgs/msg/String "{data: 'pick up the scissors'}"` |
 | put an AI agent in charge of the task | `./scripts/rollout.sh --mode=live`, then `./scripts/harness.sh` |
 | let an LLM drive both arms by writing code (cap-x) | see [`src/capx_sparklab`](src/capx_sparklab/README.md#running-a-session) |
+| chat with Claude Code or Antigravity while it drives the arms | `ros2 run coding_agent_sparklab ui`, see [`src/coding_agent_sparklab`](src/coding_agent_sparklab/README.md#running) |
 | run a policy in Isaac instead | see [`scripts/README.md`](scripts/README.md#run-a-policy) |
 | calibrate where a camera is | see [Calibrating a camera](#calibrating-a-camera) |
 | see what is running | [Foxglove](#seeing-whats-going-on-foxglove), or `ros2 node list`, `ros2 topic echo /left/joint_states` |
@@ -343,7 +348,7 @@ and restart the launch. `left_base → right_base` is
 ## Tests
 
 ```bash
-colcon test --packages-select sparklab_quest sparklab_yam sparklab_cameras capx_sparklab && colcon test-result --verbose
+colcon test --packages-select sparklab_quest sparklab_yam sparklab_cameras capx_sparklab coding_agent_sparklab && colcon test-result --verbose
 ./scripts/capx_python.sh -m pytest src/capx_sparklab/test     # cap-x's planning, on the GPU
 ```
 

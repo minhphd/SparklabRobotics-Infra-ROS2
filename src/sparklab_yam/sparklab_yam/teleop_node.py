@@ -3,10 +3,11 @@
     ros2 run sparklab_yam teleop
     ros2 run sparklab_yam teleop --ros-args -p hands:="[right]"
 
-The pose each arm has when its joint_states first arrive is HOME. Starts
-DISARMED. B/Y on either hand arms it, seeded from the measured pose; B/Y again
-disarms and ramps the arms home. Grip clutches, trigger drives the gripper, A/X
-is precision, thumbstick ramps that arm home. SIGINT/SIGTERM ramps home first.
+HOME is the rest pose, QuestTeleopConfig's rest_qpos (DEFAULT_Q_REST), where the
+drivers ramp the arms on start with rest_on_start. Starts DISARMED. B/Y on either hand arms
+it, seeded from the measured pose; B/Y again disarms and ramps the arms home.
+Grip clutches, trigger drives the gripper, A/X is precision, thumbstick ramps
+that arm home. SIGINT/SIGTERM ramps home first.
 """
 
 from __future__ import annotations
@@ -81,11 +82,8 @@ class TeleopNode(Node):
         self._gripper = {h: obs[f"{h}_gripper.pos"] for h in self._hands}
 
     def _start(self) -> None:
-        """Capture HOME and build the teleop once every arm has reported."""
-        self._home = {h: np.asarray(self._state[h].position[:ARM_JOINTS]) for h in self._hands}
-        for h, q in self._home.items():
-            self.get_logger().info(f"{h} HOME (pose at startup): {np.round(q, 3).tolist()}")
-            setattr(self._cfg, f"rest_qpos_{h}", q.tolist())
+        """Build the teleop once every arm has reported; HOME is the rest pose."""
+        self._home = {h: np.asarray(getattr(self._cfg, f"rest_qpos_{h}"), dtype=float) for h in self._hands}
         self._teleop = QuestTeleop(self._cfg, self, self._hands)
         self._seed()
         self.get_logger().info("DISARMED, holding HOME — press B/Y to arm")

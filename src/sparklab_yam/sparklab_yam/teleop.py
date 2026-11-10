@@ -1,6 +1,6 @@
 """Quest controllers -> YAM-Ultra joint targets: clutch pose mapping plus IK.
 
-Per arm keeps a ClutchPoseMapper and a DecoupledIKSolver. Per tick
+Per arm keeps a ClutchPoseMapper and an IKSolver. Per tick
 `_update_arm` runs: staleness gate -> EMA pose filter -> precision button ->
 clutch edges -> IK step -> haptic.
 
@@ -26,7 +26,7 @@ from sparklab_quest import buttons as xr_buttons
 from sparklab_quest.input import Controller, QuestInput
 from sparklab_quest.pose_mapping import ClutchPoseMapper
 
-from .ik.decoupled_ik import DecoupledIKSolver
+from .ik.solver import IKSolver
 from .model.kinematics import DEFAULT_Q_REST
 
 
@@ -78,7 +78,7 @@ class QuestTeleopConfig:
     """Config for QuestTeleop.
 
     `rest_qpos_{left,right}` (six joint angles, rad) seed each arm's qpos and
-    bias the IK Tikhonov term, which is what breaks the elbow-flip ambiguity.
+    are where the thumbstick stows it.
     """
 
     # Defaults to the vendored yam_ultra.xml; override for tightened ranges.
@@ -89,17 +89,13 @@ class QuestTeleopConfig:
     rest_qpos_right: list[float] = field(default_factory=lambda: DEFAULT_Q_REST.tolist())
 
     # IK / mapping knobs.
-    lam: float = 0.05  # Position-solve base damping
-    lam0: float = 0.15  # Adaptive-damping ramp amplitude near singular
-    w0: float = 0.05  # Manipulability threshold where ramp starts
-    mu: float = 0.02  # Tikhonov stiffness toward q_rest
-    lam_rot: float = 0.05  # Orientation-solve base damping
-    lam0_rot: float = 0.4  # Extra damping ramp amplitude near wrist gimbal
-    w0_rot: float = 0.5  # Wrist-manipulability threshold where ramp starts
+    lam: float = 0.002  # Base damping
+    lam0: float = 0.05  # Adaptive-damping ramp amplitude near singular
+    sigma0: float = 0.02  # Smallest singular value (m/rad) where the ramp starts
+    rot_weight: float = 0.1  # m per rad of orientation error
 
     rot_reach_limit: float = 0.6  # rad (~34°)
     pos_reach_limit: float = 0.25  # m
-    rot_err_hold: float = 2.2
     scale_translation: float = 1.5  # controller→EE translation gain
     scale_rotation: float = 1.5  # controller→EE rotation gain (<1 = softer)
     precision_factor: float = 0.5
@@ -120,7 +116,7 @@ class QuestTeleopConfig:
 
 
 class ArmState(TypedDict):
-    solver: DecoupledIKSolver
+    solver: IKSolver
     mapper: ClutchPoseMapper
     qpos: np.ndarray
     last_grip: bool
@@ -186,17 +182,12 @@ class QuestTeleop:
             q_rest = rest_qpos[hand]
             qpos_init = np.zeros(NQ)
             qpos_init[:ARM_DOFS] = q_rest
-            arm_solver = DecoupledIKSolver(
+            arm_solver = IKSolver(
                 arm_xml_path=config.arm_xml_path or None,
-                lam_pos=config.lam,
+                lam=config.lam,
                 lam0=config.lam0,
-                w0=config.w0,
-                mu=config.mu,
-                lam_rot=config.lam_rot,
-                lam0_rot=config.lam0_rot,
-                w0_rot=config.w0_rot,
-                rot_err_hold=config.rot_err_hold,
-                q_rest=q_rest.copy(),
+                sigma0=config.sigma0,
+                rot_weight=config.rot_weight,
                 max_dq_per_joint=config.max_dq_per_joint,
             )
             self._arms[hand] = {
@@ -487,14 +478,13 @@ class QuestTeleop:
             tgt_pos, tgt_quat = out
             arm["qpos"][:ARM_DOFS] = arm["solver"].solve(tgt_pos, tgt_quat, arm["qpos"])
 
-            # Max of four 0..1 cues: limit pressure, reach error, singularity and
-            # gimbal proximity — near gimbal the wrist goes sluggish, not limited.
+            # Max of three 0..1 cues: limit pressure, reach error and singularity
+            # proximity, which starts near joint 5 = 75° where the wrist goes sluggish.
             solver = arm["solver"]
             i_limit = min(1.0, max(0.0, (solver.last_limit_pressure - 0.05) / 0.25))
             i_reach = min(1.0, max(0.0, (solver.last_pos_err_norm - 0.03) / 0.10))
-            i_singular = max(0.0, (solver.last_singularity_proximity - 0.95) / 0.2)
-            i_gimbal = min(1.0, max(0.0, (solver.last_wrist_gimbal_proximity - 0.5) / 0.5))
-            raw_intensity = max(i_limit, i_reach, i_singular, i_gimbal)
+            i_singular = min(1.0, max(0.0, (solver.last_singularity_proximity - 0.3) / 0.6))
+            raw_intensity = max(i_limit, i_reach, i_singular)
             arm["haptic"] = 0.6 * arm["haptic"] + 0.4 * raw_intensity
         else:
             arm["haptic"] *= 0.6  # decay so vibration doesn't linger after release

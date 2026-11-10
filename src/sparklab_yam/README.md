@@ -49,7 +49,7 @@ that talks to the motors.
 | `/tf` | out | the same pose as the transform `<arm>_base → <arm>_tool0` |
 | `arm/command` | in | 6 joint targets, rad |
 | `gripper/command` | in | gripper target, 0 closed .. 1 open |
-| `park` | service | slowly move every joint to 0 (the folded rest pose) |
+| `park` | service | slowly move every joint to 0 (the folded park pose) |
 | `zero_gravity` | service (`SetBool`) | `true`: arm joints float (damped), the gripper keeps holding, commands ignored; `false`: hold where it is |
 
 Things to know:
@@ -57,18 +57,24 @@ Things to know:
 - Each command is **clamped** so no joint moves more than `max_step` (default
   0.133 rad for joints 1–3, 0.15 for 4–6) away from where it is now.
 - If the motors stop responding, `joint_states` **stops**. Silence means fault.
+- With `rest_on_start: true` (off by default) it **ramps to the rest pose**
+  `[0, 0.5, 1.0, -1.0, 0, 0]` (`DEFAULT_Q_REST`) on start, over `park_duration_s`,
+  gripper held, and ignores commands until it is there. On the way the upper arm
+  swings up to 28 cm behind the base; keep that space clear.
+- Its own ramps, park and start, never command more than `max_step` ahead of the
+  measured pose either: an arm that stalls is not left with a jump to make.
 - On Ctrl-C it **parks first**, then cuts torque.
 - At startup the gripper homes itself — keep fingers clear.
 
 Parameters (in `config/yam.yaml`): `channel`, `sim`, `rate_hz`, `max_step`,
-`park_duration_s`, `park_on_exit`, `enable_auto_recovery`, `viewer`,
+`park_duration_s`, `park_on_exit`, `rest_on_start`, `enable_auto_recovery`, `viewer`,
 `ee_mass`, `gravity_comp_factor`, `zero_gravity_comp_factor`.
 
 **Tuning gravity compensation.** All three settings are in `config/yam.yaml`:
 
 | parameter | what it is |
 |---|---|
-| `ee_mass` | the gripper's mass in kg, as i2rt's gravity model sees it; 0 keeps the stock LINEAR_4310's 0.553, which the rig uses. Fix this first if both modes are off, or after changing the gripper. |
+| `ee_mass` | the gripper's mass in kg, as i2rt's gravity model sees it: 0.953 for the rig's long fin-ray gripper; 0 keeps the stock LINEAR_4310's 0.553. Fix this first if both modes are off, or after changing the gripper. |
 | `gravity_comp_factor` | 6 numbers, joints 1–6: scale on the modelled gravity torque while **holding position** |
 | `zero_gravity_comp_factor` | the same while **floating** in zero gravity; 1.0 holds exactly the arm's weight |
 
@@ -93,8 +99,9 @@ sliders can change the scales live.
 | **A/X** (hold) | precision mode: slower, finer motion |
 | **Thumbstick click** | send that arm home |
 
-"Home" is wherever each arm was when the node started. Ctrl-C also sends the
-arms home first.
+"Home" is the rest pose `[0, 0.5, 1.0, -1.0, 0, 0]` (`DEFAULT_Q_REST`), where
+the drivers ramp the arms on start when `rest_on_start` is on. Ctrl-C also sends
+the arms home first.
 
 Don't run the teleop node while recording or running a policy — those bring
 their own teleoperator.

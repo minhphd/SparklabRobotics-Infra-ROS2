@@ -22,7 +22,7 @@ it back. It's only applied to the MuJoCo file; the URDF still says π.
 **Reference points** added by `kinematics.py`:
 
 - `tool0` — the gripper's grasp centre; the point the IK steers.
-- `j4_anchor` — a point on the forearm the position solve uses.
+- `j4_anchor` — a point on the forearm the teleop rotates the gripper about.
 
 **Naming differences:** the URDF calls the joints `dof_joint1..6` (MuJoCo:
 `joint1..6`) and models the gripper as two finger joints; LeRobot uses one

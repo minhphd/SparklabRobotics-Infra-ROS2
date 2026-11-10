@@ -1,0 +1,181 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SparkLab coding agent</title>
+<style>
+:root{
+ --ink:#141413;--body:#3d3d3a;--mut:#73726c;--faint:#a3a29b;
+ --line:#e8e6dc;--bg:#faf9f5;--soft:#f0eee6;--code:#f5f4ed;--card:#fff;
+ --accent:#d97757;--ok:#5f9a5f;--err:#c4473a;
+ --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:center;gap:10px;height:52px;padding:0 24px}
+.spark{color:var(--accent);font-size:20px;line-height:1}
+h1{margin:0;font-size:16px;font-weight:600;letter-spacing:-.1px}
+main{display:grid;grid-template-columns:minmax(0,1fr) min(560px,44vw);height:calc(100vh - 52px)}
+
+.cams{display:grid;grid-template-rows:minmax(0,1.3fr) minmax(0,1fr);gap:12px;padding:0 20px 20px 24px;min-height:0}
+.wrists{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+.cam{position:relative;margin:0;background:#1f1e1d;border-radius:14px;overflow:hidden;min-height:0}
+.cam img{width:100%;height:100%;object-fit:contain;display:block}
+.cam figcaption{position:absolute;left:10px;top:9px;font-size:12px;color:#fff;background:rgba(20,20,19,.5);
+padding:2px 9px;border-radius:99px}
+.cam.off img{visibility:hidden}
+.cam.off::after{content:'no frames on ' attr(data-topic);position:absolute;inset:0;display:grid;place-items:center;
+color:var(--faint);font:12px var(--mono)}
+
+.chat{display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--line)}
+.log{flex:1;overflow-y:auto;padding:12px 28px 8px;min-height:0}
+.log::-webkit-scrollbar{width:6px}
+.log::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px}
+.empty{color:var(--mut);font-size:13.5px;margin-top:24px;line-height:1.6}
+.empty code{font:12px var(--mono);background:var(--code);padding:1px 5px;border-radius:4px}
+.user{display:flex;justify-content:flex-end;margin:20px 0 14px}
+.user div{background:var(--soft);padding:9px 14px;border-radius:14px;max-width:85%;white-space:pre-wrap;word-break:break-word}
+.text{margin:10px 0;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+.text pre{font:12px/1.5 var(--mono);background:var(--code);border:1px solid var(--line);border-radius:8px;
+padding:10px 12px;overflow-x:auto;white-space:pre;margin:8px 0}
+.text code{font:12.5px var(--mono);background:var(--code);padding:1px 4px;border-radius:4px}
+.tool{margin:4px 0}
+.tool summary{list-style:none;cursor:pointer;display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0}
+.tool summary::-webkit-details-marker{display:none}
+.tool .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.tool.done .dot{background:var(--ok)}
+.tool.err .dot{background:var(--err)}
+.tool.run .dot{animation:pulse 1s ease-in-out infinite}
+.tool b{font-weight:600;flex:none}
+.tool .sum{font:12px var(--mono);color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tool .body{margin:4px 0 8px 3px;border-left:2px solid var(--line);padding-left:14px}
+.tool .k{font-size:11.5px;color:var(--faint);margin-top:6px}
+.tool pre{font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;margin:3px 0;max-height:320px;
+overflow:auto;background:var(--code);border-radius:8px;padding:8px 10px;color:var(--body)}
+.tool.err pre.out{color:var(--err)}
+.note{font-size:12px;color:var(--mut);text-align:center;margin:16px 0}
+.working{color:var(--accent);font-size:13px;display:flex;gap:7px;align-items:center;margin:12px 0}
+.working .spark{font-size:15px;animation:spin 2.4s linear infinite}
+@keyframes pulse{50%{opacity:.25}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.composer{margin:4px 20px 18px;background:var(--card);border:1px solid var(--line);border-radius:18px;
+padding:12px 10px 8px 16px;box-shadow:0 1px 4px rgba(20,20,19,.05)}
+.composer:focus-within{border-color:#d6d3c7}
+textarea{width:100%;border:0;outline:0;resize:none;font:inherit;line-height:1.5;max-height:200px;
+background:transparent;color:var(--ink);padding:0}
+textarea::placeholder{color:var(--faint)}
+.bar{display:flex;align-items:center;gap:8px;margin-top:8px}
+select{font:inherit;font-size:12.5px;border:1px solid var(--line);border-radius:8px;padding:4px 6px;
+background:var(--bg);color:var(--body);cursor:pointer}
+select:disabled{cursor:default;opacity:.6}
+.model{font-size:12px;color:var(--faint);margin-right:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+button{font:inherit;border:0;cursor:pointer}
+#send{width:32px;height:32px;border-radius:10px;background:var(--accent);color:#fff;font-size:17px;line-height:1}
+#send:disabled{opacity:.35;cursor:default}
+#stop{font-size:12.5px;padding:6px 12px;border-radius:10px;background:var(--ink);color:#fff}
+</style></head><body>
+<header><span class="spark">✻</span><h1>SparkLab coding agent</h1></header>
+<main>
+ <section class="cams">
+  <figure class="cam" data-topic="/cameras/top/color/image_raw"><img data-cam="top" alt="top camera"><figcaption>top</figcaption></figure>
+  <div class="wrists">
+   <figure class="cam" data-topic="/cameras/left_wrist/color/image_raw"><img data-cam="left_wrist" alt="left wrist camera"><figcaption>left wrist</figcaption></figure>
+   <figure class="cam" data-topic="/cameras/right_wrist/color/image_raw"><img data-cam="right_wrist" alt="right wrist camera"><figcaption>right wrist</figcaption></figure>
+  </div>
+ </section>
+ <section class="chat">
+  <div class="log" id="log"></div>
+  <form class="composer" id="f" autocomplete="off">
+   <textarea id="t" rows="1" placeholder="Tell the agent what to do"></textarea>
+   <div class="bar">
+    <select id="mode" title="coding agent"></select>
+    <span class="model" id="model"></span>
+    <button type="button" id="stop" title="Stop the agent and its scripts, then fold both arms to park">Stop</button>
+    <button type="submit" id="send" aria-label="Send">↑</button>
+   </div>
+  </form>
+ </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Fenced code, inline code and bold; everything else stays plain text.
+const md = s => esc(s).split(/```[\w-]*\n?/).map((part, i) => i % 2
+  ? `<pre>${part.replace(/\n$/, '')}</pre>`
+  : part.replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')).join('');
+const open = new Set();
+let version = -1, items = [], busy = false, workdir = '';
+
+function tool(it){
+  const entries = Object.entries(it.input || {});
+  const first = entries.find(([, v]) => typeof v === 'string');
+  const cls = it.error ? 'err' : it.done ? 'done' : 'run';
+  return `<details class="tool ${cls}" data-id="${it.id}"${open.has(it.id) ? ' open' : ''}>
+    <summary><span class="dot"></span><b>${esc(it.name)}</b><span class="sum">${esc(first ? first[1].split('\n')[0] : '')}</span></summary>
+    <div class="body">${entries.map(([k, v]) =>
+      `<div class="k">${esc(k)}</div><pre>${esc(typeof v === 'string' ? v : JSON.stringify(v, null, 1))}</pre>`).join('')}
+    ${it.output ? `<div class="k">${it.error ? 'error' : 'output'}</div><pre class="out">${esc(it.output)}</pre>` : ''}</div></details>`;
+}
+
+function draw(){
+  const log = $('log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  log.innerHTML = items.map(it =>
+    it.kind === 'user' ? `<div class="user"><div>${esc(it.text)}</div></div>`
+    : it.kind === 'text' ? `<div class="text">${md(it.text)}</div>`
+    : it.kind === 'tool' ? tool(it)
+    : `<div class="note">${esc(it.text)}</div>`).join('')
+    + (busy ? '<div class="working"><span class="spark">✻</span>Working…</div>' : '')
+    || `<div class="empty">Tell the agent what the arms should do. It writes Python against the
+       arms' joints, their kinematics and the cameras, and runs it in <code>${esc(workdir)}</code>.</div>`;
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function tick(){
+  let s;
+  try { s = await (await fetch(`/api/state?since=${version}`)).json(); } catch { return; }
+  const mode = $('mode');
+  if (!mode.options.length)
+    mode.innerHTML = Object.entries(s.modes).map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join('');
+  mode.value = s.mode;
+  mode.disabled = s.busy;
+  $('model').textContent = s.model;
+  $('send').disabled = s.busy;
+  workdir = s.workdir;
+  if (s.items || s.busy !== busy){
+    if (s.items){ items = s.items; version = s.version; }
+    busy = s.busy;
+    draw();
+  }
+}
+
+async function post(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body ?? {})});
+  tick();
+  return r.ok;
+}
+
+$('f').onsubmit = async e => {
+  e.preventDefault();
+  const t = $('t');
+  if (!t.value.trim() || busy) return;
+  if (await post('/api/send', {text: t.value})){ t.value = ''; t.style.height = ''; }
+};
+$('t').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); $('f').requestSubmit(); } };
+$('t').oninput = e => { e.target.style.height = ''; e.target.style.height = e.target.scrollHeight + 'px'; };
+$('mode').onchange = e => post('/api/mode', {mode: e.target.value});
+$('stop').onclick = () => post('/api/stop');
+document.addEventListener('toggle', e => {
+  const d = e.target;
+  if (d.matches && d.matches('details.tool')) d.open ? open.add(+d.dataset.id) : open.delete(+d.dataset.id);
+}, true);
+
+for (const img of document.querySelectorAll('.cam img')){
+  const next = delay => setTimeout(() => img.src = `/api/camera/${img.dataset.cam}.jpg?t=${Date.now()}`, delay);
+  img.onload = () => { img.parentElement.classList.remove('off'); next(100); };
+  img.onerror = () => { img.parentElement.classList.add('off'); next(1000); };
+  next(0);
+}
+tick(); setInterval(tick, 600);
+</script></body></html>

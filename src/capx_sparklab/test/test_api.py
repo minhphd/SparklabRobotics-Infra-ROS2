@@ -55,7 +55,8 @@ def api():
     os.environ.update(ROS_DOMAIN_ID="89", ROS_LOCALHOST_ONLY="1")
     driver = Path(get_package_prefix("sparklab_yam")) / "lib" / "sparklab_yam" / "driver"
     drivers = [subprocess.Popen([str(driver), "--ros-args", "-r", f"__ns:=/{arm}", "-r", "__node:=yam_driver",
-                                 "-p", "sim:=true", "-p", "park_on_exit:=false"],
+                                 "-p", "sim:=true", "-p", "park_on_exit:=false",
+                                 "-p", "rest_on_start:=false"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                for arm in ("left", "right")]
     rclpy.init()

@@ -14,9 +14,9 @@ from sparklab_sim import calibration, paths, twin_scene
 def test_tool0_is_the_drivers():
     if not paths.TWIN_URDF.exists():
         pytest.skip("run ./scripts/isaac_python.sh -m sparklab_sim.convert --twin first")
-    from sparklab_yam.ik.decoupled_ik import DecoupledIKSolver
+    from sparklab_yam.ik.solver import IKSolver
 
-    driver = DecoupledIKSolver()
+    driver = IKSolver()
     rng = np.random.default_rng(0)
     for q in rng.uniform([-1.5, 0.0, 0.0, -1.5, -1.5, -2.0], [1.5, 2.5, 2.5, 1.5, 1.5, 2.0], (20, 6)):
         position, quat_wxyz = driver.fk(q)

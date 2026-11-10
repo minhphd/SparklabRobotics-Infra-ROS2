@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation
 
 from capx.integrations.motion.curobo_v2 import Planner
 from capx_sparklab.robot import TOOL0_DEPTH, curobo_config
-from sparklab_yam.ik.decoupled_ik import DecoupledIKSolver
+from sparklab_yam.ik.solver import IKSolver
 
 STOCK_TOOL0 = 0.1347  # sparklab_yam's tool0, the stock gripper's grasp site
 
@@ -30,7 +30,7 @@ def arm(request):
 
 def test_tool_frame_matches_the_stack_model(arm):
     base, planner = arm
-    ik = DecoupledIKSolver()
+    ik = IKSolver()
     rng = np.random.default_rng(0)
     lower, upper = ik.joint_limits[:, 0], ik.joint_limits[:, 1]
     for q in rng.uniform(lower, upper, (20, 6)):

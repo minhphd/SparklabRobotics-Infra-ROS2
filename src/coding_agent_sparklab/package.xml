@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>coding_agent_sparklab</name>
+  <version>0.1.0</version>
+  <description>A web page to chat with Claude Code or Antigravity while it drives both YAM arms through joint-level Python tools.</description>
+  <maintainer email="phdminh01@gmail.com">SparkLab</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-psutil</exec_depend>
+  <exec_depend>sparklab_yam</exec_depend>
+  <!-- pip, no rosdep key: fastapi, uvicorn; the claude and agy CLIs on PATH -->
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -16,7 +16,8 @@ from sparklab_yam.keyboard import Keyboard
 
 @pytest.fixture
 def rig():
-    rclpy.init(args=["--ros-args", "-p", "sim:=true", "-p", "park_on_exit:=false", "-r", "__ns:=/left"])
+    rclpy.init(args=["--ros-args", "-p", "sim:=true", "-p", "park_on_exit:=false", "-p", "rest_on_start:=false",
+                     "-r", "__ns:=/left"])
     driver, keyboard, probe = YamDriver(), Keyboard(), Node("probe")
     executor = SingleThreadedExecutor()
     for n in (driver, keyboard, probe):

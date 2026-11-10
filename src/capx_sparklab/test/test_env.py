@@ -30,7 +30,7 @@ from visualization_msgs.msg import MarkerArray
 
 from capx_sparklab.env import STOCK_TOOL0, YamEnv
 from capx_sparklab.robot import GRIPPER_OPENING
-from sparklab_yam.ik.decoupled_ik import DecoupledIKSolver
+from sparklab_yam.ik.solver import IKSolver
 
 K = [400.0, 0.0, 320.0, 0.0, 400.0, 240.0, 0.0, 0.0, 1.0]
 K_TOP = [911.0, 0.0, 645.0, 0.0, 911.0, 363.0, 0.0, 0.0, 1.0]
@@ -100,7 +100,8 @@ def env():
     os.environ.update(ROS_DOMAIN_ID="88", ROS_LOCALHOST_ONLY="1")
     driver = Path(get_package_prefix("sparklab_yam")) / "lib" / "sparklab_yam" / "driver"
     drivers = [subprocess.Popen([str(driver), "--ros-args", "-r", f"__ns:=/{arm}", "-r", "__node:=yam_driver",
-                                 "-p", "sim:=true", "-p", "park_on_exit:=false"],
+                                 "-p", "sim:=true", "-p", "park_on_exit:=false",
+                                 "-p", "rest_on_start:=false"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                for arm in ("left", "right")]
     rclpy.init()
@@ -127,7 +128,7 @@ def env():
 
 
 def _grasp_base(arm: str, q: np.ndarray) -> np.ndarray:
-    pos, wxyz = DecoupledIKSolver().fk(q)
+    pos, wxyz = IKSolver().fk(q)
     R = Rotation.from_quat([*wxyz[1:], wxyz[0]]).as_matrix()
     base = EXTRINSIC["right_base"] if arm == "right" else np.eye(4)
     return base[:3, :3] @ (pos - R[:, 2] * STOCK_TOOL0) + base[:3, 3]

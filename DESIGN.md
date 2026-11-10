@@ -49,9 +49,24 @@ driver stops publishing `joint_states` the moment the loop dies, and clients
 refuse joint states older than 0.5 s.
 
 **Parking.** i2rt's `close()` cuts torque wherever the arm is, so the driver
-first ramps every joint to zero — the folded rest pose, where every recorded
+first ramps every joint to zero — the folded park pose, where every recorded
 episode starts. It parks on its own shutdown because nothing else can if its
 process is killed.
+
+**Rest on start** (`rest_on_start`). The driver, the one process always there,
+can ramp its arm to the rest pose when it starts, so every session begins from
+the same pose, ready for teleop. The startup ramp and park share one lock: a
+park asked for mid-ramp waits for it rather than interleaving its commands.
+
+**Ramps lead the arm by at most `max_step`.** The first startup ramp on the rig
+(2026-11-10) commanded its waypoints open-loop: the folded arms sat still, then
+jumped to the rest pose. The driver's own ramps were the one path that skipped
+the `max_step` clamp every client command gets, so a stalled joint let the
+target run up to 1 rad ahead. Now each ramp command is clamped to `max_step`
+from the measured pose, eased in and out at 100 Hz, and the ramp runs until the
+arm arrives or twice `park_duration_s` passes. Why the arms stalled is not known:
+no joint states were recorded. So `rest_on_start` stays off until someone has
+watched the clamped ramp on the rig.
 
 ## Teleoperation
 
@@ -77,19 +92,39 @@ exactly (a 60°+60° loop at 1.5× leaves ~23°). Re-gripping realigns.
 
 ## Inverse kinematics
 
-Joints 1–3 handle position, 4–6 orientation, one damped step per tick. The
-wrist isn't perfectly spherical (6.2 cm offset), so twisting adds a small
-position error; the operator corrects by eye.
+One damped least-squares step per tick on the whole 6-D error: every joint works
+on position and orientation together, orientation weighted at 0.1 m per radian.
+`solve()` never fails or freezes. Three edge cases:
 
-`solve()` never fails or freezes. Four edge cases:
+1. **Singularities**, shoulder or wrist (joint 5 near ±90°): damping grows as
+   the Jacobian's smallest singular value falls below 0.02, so steps stay
+   bounded. A 1° twist at joint 5 = 88° moves no joint more than 0.7°.
+2. **Joint limits**: a joint the step would push past its limit is pinned there
+   and the rest re-solve, so the shoulder and elbow make up what a stopped wrist
+   cannot. With joint 5 at its stop and 15° more twist asked, the tool gives up
+   6 mm; clamping after an unconstrained step gave up 32 mm.
+3. **The per-tick cap** shrinks the whole step, not each joint, so the tool
+   keeps its direction while the joints are rate-limited.
 
-1. **Edge of the workspace** — damping grows so the step shrinks smoothly to zero.
-2. **Wrist gimbal lock** (joint 5 near ±90°) — same trick for the wrist; the
-   old exact solution demanded 68° of joint motion per 1° of twist there.
-3. **Joint limits** — clamped, so the arm reaches as far as it can.
-4. **Twist demanded nearly 180° away** — the wrist holds still. The
-   shortest-way direction flips with tiny hand tremor there, which made the
-   arm shake (reproduced in sim at ~150° with 0.2° of tremor).
+**The rest pose `[0, 0.5, 1.0, -1.0, 0, 0]`** (`DEFAULT_Q_REST`: where the drivers ramp
+the arms on start with `rest_on_start`, the teleop's HOME and stow target, the IK seed) is compact but near the shoulder singularity: the wrist is 6 cm
+from joint 1's axis and the elbow 21 cm behind the base. Sideways motion from
+there is damped (smallest singular value 0.012), and an engaged controller buzzes
+faintly at about 0.18.
+
+**There is no antipode hold.** Near 180° of orientation error the shortest-way
+rotation flips with tremor. The clutch's `rot_reach_limit` keeps teleop's error
+under 0.6 rad of the commanded pose the step starts from, so it cannot get there.
+
+**Replaced: the decoupled solver** (`archive/decoupled_ik.py`, until
+2026-11-10). Joints 1–3 solved position at a forearm point, 4–6 orientation,
+each alone. It never moved the shoulder for a twist, but it could not trade
+between the groups: at a wrist limit the error just stayed. Its pull toward
+rest, which kept the elbow from flipping, also left about 1 mm of bias and
+3.7 mm of lag on a 5 cm circle at 100 Hz, where the full step tracks exactly.
+Taken 0.45 m past the workspace and back, the full step keeps the elbow's bend
+without that pull. Its wrist hold past 126° was the antipode guard above, which
+`rot_reach_limit` has made unreachable since it was added.
 
 ## The arm model
 
@@ -139,9 +174,9 @@ arm fall: arm kp to 0 with kd kept (a released arm can't run away), the
 gripper's gains untouched, and the gravity factor at 1.0 while floating. The
 real culprit was mass: the long gripper weighed 0.953 kg (Raiden's `arms.json`), but
 i2rt models the stock 0.553 kg one. The holding factors stay separate, since
-they also cancel friction and tracking error under kp. With the stock gripper back
-(see [cap-x on the rig](#cap-x-on-the-rig)), the drivers use i2rt's
-mass and factors again.
+they also cancel friction and tracking error under kp. The stock gripper used i2rt's
+mass and factors; with the long gripper back (see [cap-x on the rig](#cap-x-on-the-rig)),
+the drivers use 0.953 kg and the factors tuned for it again.
 
 **The left arm's joint 4 zero was 5–7° off.** Hand-eye calibration stalled at
 7.5 mm / 1.6° with a 0.2–0.3 px board fit, so the camera was fine; a fitted
@@ -416,6 +451,15 @@ surfaces; and the 4 cm-wide fingers left little of a held object for a handover.
 fin-rays' compliance did not outweigh that for planning work, so the rig went back
 to i2rt's LINEAR_4310 on the same camera mounts.
 
+**The long gripper again (2026-11-10).** The fin-rays went back on, on the same
+sliders and camera mounts. The drivers' mass and gravity factors are the ones
+tuned for them before. `tool0` stays the stock grasp site, 0.1347 m out, as it
+did the first time: the drivers' TF and the wrist cameras' calibration hang off
+it. The fin-ray tips end 7.5 cm past it (14.5 cm fingers where the stock ones
+are 8 cm and end 1 cm past it), which the coding agent gets as `FINGERTIPS`.
+cap-x's robot description, its GraspGenX gripper and both sims still model the
+stock hand.
+
 **A grasp is left by the lift planned with it.** On the rig, a GraspGenX grasp on a
 1.9 cm marker put the fingertips at z ≈ −0.012. The fitted fingertip spheres
 reached −0.022, 1.2 cm into the planner's table, whose top deliberately errs high
@@ -431,6 +475,66 @@ accepts any start within the lag guard's 0.15 rad of the plan's first waypoint.
 **Tests without cap-x are not imported at all.** ROS's launch_testing pytest
 plugin imports every test module; a module-level `importorskip` inside it skips
 the whole session, every package's tests. `conftest.py` leaves them out instead.
+
+## The coding agent
+
+**A few functions, no skills.** `coding_agent_sparklab` is the other end from
+cap-x: the agent gets joint states, FK, IK, a joint command, camera frames and
+the calibration, and builds anything bigger itself, perception included. They are a Python module rather than agent tools (MCP)
+because a coding agent composes in code: a loop over `ik` and `command` is one
+script, not twenty tool calls. Each script is its own ROS node, so a killed
+script leaves the arm at its last waypoint.
+
+**The agent sees through files.** Claude Code's file reader shows the model an
+image (agy's is expected to; untested), so `get_image` returns pixels and the
+agent saves and opens a PNG; the same pixels, and `get_depth`'s, serve its own
+code. Each camera stream is subscribed only when asked for, because a script
+that only moves an arm would otherwise pull about 100 MB/s of colour, and
+two-thirds as much again of depth, on the rig's own machine.
+
+**Skills stored as Claude Code stores them.** The agent saves what works, so it
+does not rewrite a pick every session. Each skill is a folder with a `SKILL.md`
+whose front matter carries a name and a description, and its code in `scripts/`.
+Only the descriptions go into the brief; the agent reads a `SKILL.md` when one
+matters and runs scripts without reading them, so the brief stays short as skills
+pile up. One shared `rig-toolkit` keeps helpers from being copied into every
+skill. `--add-dir` lets the agent write there and nowhere else outside its
+working directory.
+
+**The CLIs, not their SDKs.** Claude Code and Antigravity both have a headless
+mode that reads NDJSON messages on stdin, streams events on stdout and stays up
+across turns. Running the CLIs keeps the operator's own sign-in and gives both
+agents one shape; only the event names differ. `agy` has no system-prompt flag,
+so its brief opens the conversation. Its event handling follows agy's headless
+docs (`init`, `step_update`, `result`) and is tested against those documented
+shapes, not a live `agy`.
+
+**Scoped permissions, not auto-approve.** Approving every tool call
+(`--dangerously-skip-permissions`) was rejected for an agent on a physical rig.
+The agent may edit files in its working directory and run the workspace's
+interpreter, nothing else. That interpreter can still do anything Python can:
+the scope narrows mistakes, not intent.
+
+**Stop kills the process tree, then parks.** Claude Code's Bash tool starts each
+command in a new session and process group (measured: the script's pgid and sid
+differ from the CLI's), so killing the CLI's group would leave the script
+driving the arm. psutil walks the children instead. Stop then parks both arms,
+so it always ends in the same known pose; the park ignores commands while it
+runs, so a script that escaped the kill cannot fight it. Stop is shown even
+between turns, because a script the agent left running in the background keeps
+moving the arm after the turn ends.
+
+**Localhost only.** Whoever reaches the page gets an agent that runs code on the
+rig, so unlike cap-x's dashboard it binds 127.0.0.1; `ssh -L` for remote use.
+
+**`ik` iterates the teleop's solver** to convergence, each step capped at
+0.3 rad so a far start does not overshoot. From one seed it reaches 1 mm / 0.6°
+on 75% of random reachable poses; with eight random restarts, 97%. The rest
+raise rather than return an approximation.
+
+**`command` is `YamEnv`'s single-target move**: a straight-line joint ramp at
+0.4 rad/s under the 0.15 rad lag guard, the values capx_sparklab runs on the rig.
+The gripper moves after the arm arrives, the order a grasp needs.
 
 ## Two rules plugin discovery depends on
 

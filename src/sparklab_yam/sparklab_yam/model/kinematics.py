@@ -1,9 +1,9 @@
 """MuJoCo model construction for the I2RT YAM-Ultra arm.
 
 Combines the vendored arm and gripper MJCF (both copied byte-for-byte from
-i2rt v1.2.4) and adds the two sites the IK pipeline needs: ``tool0`` at the
-gripper's grasp centre, and ``j4_anchor`` on link3, the wrist-invariant
-position-task anchor. The IK math lives in ``ik/decoupled_ik.py``.
+i2rt v1.2.4) and adds two sites: ``tool0`` at the gripper's grasp centre, the
+IK's end effector, and ``j4_anchor`` on link3, the wrist-invariant point the
+teleop rotates the gripper about. The IK math lives in ``ik/solver.py``.
 
 JOINT LIMITS. Everything matches i2rt except ``INTENTIONAL_DEVIATIONS`` —
 joint3's upper limit is 3.0 rad here against i2rt's nominal π. That is
@@ -43,7 +43,7 @@ JOINT6_AXIS = "0 0 -1"
 TOOL0_OFFSET_XYZ = np.array([0.0, 0.0, -0.1347])
 TOOL0_OFFSET_QUAT = np.array([0.0, 1.0, 0.0, 0.0])
 
-DEFAULT_Q_REST = np.array([0.0, np.pi / 2, np.pi / 2, 0.0, 0.0, 0.0])
+DEFAULT_Q_REST = np.array([0.0, 0.5, 1.0, -1.0, 0.0, 0.0])
 
 # joint name -> ((lower, upper), why). _check_against_i2rt() reports these as
 # expected rather than drift, so the check stays meaningful.
@@ -339,7 +339,7 @@ def _check_against_i2rt() -> None:
 
 
 def _self_test() -> None:
-    """Compile the model and verify the wrist geometry and 3+3 decoupling."""
+    """Compile the model and verify the wrist geometry."""
     _check_vendored_assets_agree()
     _check_against_i2rt()
     model, data = build_model_with_tool0_site()

@@ -2,6 +2,7 @@
 
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ from tf2_msgs.msg import TFMessage
 import sparklab_yam.driver
 from sparklab_yam.constants import DEFAULT_MAX_RELATIVE_TARGET
 from sparklab_yam.driver import JOINT_NAMES, YamDriver
+from sparklab_yam.model.kinematics import DEFAULT_Q_REST
 
 
 KP = np.array([80.0, 80.0, 80.0, 40.0, 10.0, 10.0, 20.0])
@@ -41,8 +43,9 @@ def gains(monkeypatch):
 
 
 @pytest.fixture
-def rig():
-    rclpy.init(args=["--ros-args", "-p", "sim:=true", "-p", "park_duration_s:=0.5"])
+def rig(request):
+    rest = "true" if getattr(request, "param", False) else "false"
+    rclpy.init(args=["--ros-args", "-p", "sim:=true", "-p", "park_duration_s:=0.5", "-p", f"rest_on_start:={rest}"])
     driver, probe = YamDriver(), Node("probe")
     executor = MultiThreadedExecutor()
     executor.add_node(driver)
@@ -122,6 +125,30 @@ def test_park_ramps_everything_to_zero(rig):
         time.sleep(0.05)
     assert future.result().success
     assert list(_latest(states).position) == pytest.approx([0.0] * 7)
+
+
+@pytest.mark.parametrize("rig", [True], indirect=True)
+def test_start_ramps_to_the_rest_pose_and_a_park_waits_for_it(rig):
+    probe, states = rig
+    time.sleep(0.2)
+    assert _call(probe, Trigger, "park", Trigger.Request()).success
+    assert list(_latest(states).position) == pytest.approx([0.0] * 7)
+    rest = next(s for s in states if np.allclose(s.position[:6], DEFAULT_Q_REST, atol=0.02))
+    assert rest.position[6] == pytest.approx(states[0].position[6])
+
+
+def test_a_ramp_never_leads_a_stalled_arm_by_more_than_max_step():
+    sent, warnings = [], []
+    stalled = SimpleNamespace(get_joint_pos=lambda: np.zeros(7), command_joint_pos=lambda q: sent.append(np.array(q)))
+    driver = SimpleNamespace(
+        _max_step=np.asarray(DEFAULT_MAX_RELATIVE_TARGET), _ramp_lock=threading.Lock(), _lock=threading.Lock(),
+        _zero_gravity=False, _ramping=False, _robot=stalled, _park_s=0.2, _cmd=np.zeros(7),
+        get_logger=lambda: SimpleNamespace(warning=warnings.append))
+    assert not YamDriver._ramp(driver, np.array([0.0, 0.5, 1.0, -1.0, 0.0, 0.0, 1.0]))
+    lead = np.max(np.abs(np.array(sent)[:, :6]), axis=0)
+    assert np.all(lead <= np.asarray(DEFAULT_MAX_RELATIVE_TARGET) + 1e-12)
+    assert lead[2] == pytest.approx(DEFAULT_MAX_RELATIVE_TARGET[2])
+    assert warnings and not driver._ramping
 
 
 def _call(probe, srv_type, name, request):
