@@ -42,6 +42,7 @@ from .constants import ARM_JOINTS, DEFAULT_MAX_RELATIVE_TARGET
 from .ik.solver import IKSolver
 from .model.kinematics import DEFAULT_Q_REST
 from .run import run
+from .sim_coupling import apply_joint_couplings
 
 JOINT_NAMES = [f"joint_{j}" for j in range(1, ARM_JOINTS + 1)] + ["gripper"]
 RAMP_DT = 0.01
@@ -53,7 +54,7 @@ class YamDriver(Node):
     def __init__(self) -> None:
         super().__init__("yam_driver")
         channel = self.declare_parameter("channel", "can_left").value
-        sim = self.declare_parameter("sim", False).value
+        sim = self._sim = self.declare_parameter("sim", False).value
         rate_hz = self.declare_parameter("rate_hz", 100.0).value
         self._max_step = np.asarray(self.declare_parameter(
             "max_step", list(DEFAULT_MAX_RELATIVE_TARGET)).value, dtype=float)
@@ -122,6 +123,15 @@ class YamDriver(Node):
         chain = getattr(self._robot, "motor_chain", None)
         return chain is None or getattr(chain, "running", True)
 
+    def _command(self, q: np.ndarray) -> None:
+        """Command the robot; in sim, also move joints the SimRobot leaves to its equalities."""
+        self._robot.command_joint_pos(q)
+        if self._sim:
+            # Same lock the viewer syncs under, so it never draws a half-updated pose.
+            with self._robot._lock:
+                apply_joint_couplings(self._robot._model, self._robot._data,
+                                      min(len(q), self._robot._model.nq))
+
     # ---- state ------------------------------------------------------------
     def _publish_state(self) -> None:
         # A dead chain keeps returning the last pose, so publishing it would
@@ -173,7 +183,7 @@ class YamDriver(Node):
             step = target - present
             overshoot = np.abs(step) - self._max_step
             self._cmd[:ARM_JOINTS] = present + np.clip(step, -self._max_step, self._max_step)
-            self._robot.command_joint_pos(self._cmd.copy())
+            self._command(self._cmd.copy())
         if np.any(overshoot > 0) and time.monotonic() - self._last_clamp_warn > 1.0:
             self._last_clamp_warn = time.monotonic()
             j = int(np.argmax(overshoot))
@@ -186,7 +196,7 @@ class YamDriver(Node):
             if self._ramping or self._zero_gravity or not self._alive():
                 return
             self._cmd[ARM_JOINTS] = float(np.clip(msg.data, 0.0, 1.0))
-            self._robot.command_joint_pos(self._cmd.copy())
+            self._command(self._cmd.copy())
 
     # ---- parking ----------------------------------------------------------
     def _ramp(self, target: np.ndarray) -> bool:
@@ -210,7 +220,7 @@ class YamDriver(Node):
                     a = a * a * (3.0 - 2.0 * a)
                     present = np.asarray(self._robot.get_joint_pos(), dtype=float)
                     command = present + np.clip((1.0 - a) * start + a * target - present, -lead, lead)
-                    self._robot.command_joint_pos(command)
+                    self._command(command)
                     arrived = a == 1.0 and np.max(np.abs(present - target)[:ARM_JOINTS]) < RAMP_TOL
                     if arrived or time.monotonic() - t0 > 2 * self._park_s:
                         break
@@ -266,7 +276,7 @@ class YamDriver(Node):
             self._robot.update_kp_kd(kp, kd)
         # update_kp_kd only stores gains; commanding the present pose applies them.
         self._cmd = np.asarray(self._robot.get_joint_pos(), dtype=float)
-        self._robot.command_joint_pos(self._cmd.copy())
+        self._command(self._cmd.copy())
         self._zero_gravity = on
 
     def _on_zero_gravity(self, request: SetBool.Request,

@@ -142,7 +142,8 @@ def test_a_ramp_never_leads_a_stalled_arm_by_more_than_max_step():
     stalled = SimpleNamespace(get_joint_pos=lambda: np.zeros(7), command_joint_pos=lambda q: sent.append(np.array(q)))
     driver = SimpleNamespace(
         _max_step=np.asarray(DEFAULT_MAX_RELATIVE_TARGET), _ramp_lock=threading.Lock(), _lock=threading.Lock(),
-        _zero_gravity=False, _ramping=False, _robot=stalled, _park_s=0.2, _cmd=np.zeros(7),
+        _zero_gravity=False, _ramping=False, _robot=stalled, _command=stalled.command_joint_pos, _park_s=0.2,
+        _cmd=np.zeros(7),
         get_logger=lambda: SimpleNamespace(warning=warnings.append))
     assert not YamDriver._ramp(driver, np.array([0.0, 0.5, 1.0, -1.0, 0.0, 0.0, 1.0]))
     lead = np.max(np.abs(np.array(sent)[:, :6]), axis=0)

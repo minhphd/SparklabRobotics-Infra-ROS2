@@ -220,6 +220,104 @@ it, so one cert works on the LAN, the campus network and a USB tunnel.
 Publishing them as a latched topic means a teleop that starts later still gets
 them.
 
+## The GELLO node
+
+GELLO is an absolute leader: unlike Quest's clutch, which re-anchors on every
+grip, it commands wherever the operator's hand is. Following it on start-up,
+after a fault or after a restart is a jump, so the node starts DISARMED and
+arms only on an explicit request whose next reading matches the measured pose.
+
+**The guard lives in the node, not the driver.** In the pre-ROS stack it lived
+in `arm_server`, the one process that outlived a crashed client. Here that
+would be the driver, which Quest teleop shares; the node carries the same
+`ArmGuard` instead. What that gives up: if the node is killed while ARMED,
+nothing re-commands a hold, and the driver keeps its last target. Because the
+driver clamps every command to `max_step` from the measured pose, that target
+is at most one step (0.133–0.15 rad) from where the arm was, so the arm stops
+there rather than running on. A driver-side command timeout would move that
+stop to the measured pose; it was left out to keep the driver unchanged for
+Quest, and is the first thing to add if that step matters on hardware.
+
+**Three different stops.** Not publishing leaves the driver on its last target.
+Leaving ARMED publishes the measured pose once, which is a hold where the arm
+is. A hold is never built from stale `joint_states`: a pose the driver stopped
+reporting is not where the arm is.
+
+**Rate limits are per second, not per message.** The driver's `max_step` is
+per message, so its speed bound scales with the publish rate (0.133 rad × 100 Hz
+is ~13 rad/s on paper, not a measured speed). The guard scales each step by
+elapsed time, and also rate-limits the gripper, which the driver only clips to
+0..1.
+
+**Steps start from the previous command, not the measured pose.** The first
+version stepped from the measured pose, so a target never led the arm by more
+than one step (0.01 rad at 1 rad/s and 100 Hz). Against i2rt's YAM gains
+(kp 80/80/80/40/10/10) that is 0.8 Nm at the base and 0.1 Nm at the wrist: on
+the real arm (2026-10-29) the base did not move and other joints crept.
+The kinematic sim tracks exactly, so it never showed. A lagging or blocked joint
+now sees the full error, up to the driver's `max_step`, as in i2rt's
+`minimum_gello` and robots_realtime, which forward the leader pose unlimited.
+
+**Second finger in sim.** i2rt's `SimRobot` writes `qpos[:7]` and runs only
+kinematics, so the LINEAR_4310's second finger, coupled by a joint equality
+that only `mj_step` enforces, never moved. The sim driver solves that joint
+from the model's own equality after every command; hardware is untouched.
+
+### Homing the leader
+
+Posing the leader by hand to within 0.15 rad of a folded arm is slow, so the
+node drives the leader there itself, as robots_realtime's `GelloLeaderAgent`
+does with `drive_to_zero`. i2rt's `minimum_gello` instead ramps the follower to
+the leader on a button press; that moves the real arm toward an arbitrary pose,
+so the leader moves instead and the arm check stays as it was.
+
+The target is the arm's measured pose mapped back through `zero_deg` and `sign`,
+not the leader's own calibrated zero, which is up to 5 deg away and would eat
+into the arm tolerance. It was YAM zero until 2026-10-30, when the real right
+arm started with j6 at -0.25 rad: arming was refused until the arm was parked,
+and the park closed the gripper under a lever homed open. The leader
+driver's `drive_to_config` is not used because it leaves `Goal_Velocity` at its
+power-up 0, the servo's maximum speed; homing caps it instead.
+
+On this unit (2026-10-29) a `Goal_Position` written while torque was off was
+dropped on enable: j1 sat 40 deg off with zero load, at full torque limit. The
+first homing version wrote the goal first and passed only because the leader
+started near zero. Homing now writes the present pose, enables, then writes the
+goal. Goal, speed and torque limit are RAM registers, so homing writes no EEPROM.
+
+The lever is homed too. It is free when unpowered and read 0.72, untouched,
+after the wrist homed, so `~/arm` refused on the gripper. Its target is the
+arm's measured gripper, not a constant: a sim arm starts closed, the real arm
+open (1.0 after its gripper self-calibration, 2026-10-29).
+
+### Leader hold
+
+The leader hold in the robots_realtime GIF is the driver's `start_arm_hold`:
+torque on at the pose, released when a joint's current rises above a sampled
+baseline. Here the release is a 2 deg push read from the position the node
+already polls, so there is no current baseline to sample or threshold to tune,
+and no extra bus read per tick.
+
+### Leader dither: tried and removed
+
+robots_realtime enables the leader driver's stiction-breaking dither by default.
+On this unit (5.5 V supply, 2026-10-29, hands off) it does not work: at its
+±0.65 deg the joints moved 0–0.5 deg p2p for any torque limit up to 300, since
+the P term on a 7-tick error stays far below the limit. At ±1.5–5 deg they
+walked instead of oscillating (j5 -13 deg in 2 s): the dither re-centres on the
+present pose every tick, so stiction ratchets it one way, and an armed follower
+would drift with it. The driver also rewrites `P_Coefficient` in unlocked EEPROM.
+
+### Wrist max_step in teleop.launch.py
+
+With the driver capping the lead at `max_step`, a joint tops out near
+`kp * max_step / kd` before friction: ~2.1 rad/s for j1–3, ~4 for j4, but ~1
+for j5/j6 (kp 10, kd 1.5). On the real arms (2026-10-30) j5 lagged on both
+sides, with the driver clamping leads of 0.24–0.26 rad. The launch doubles
+j5/j6 `max_step` to 0.3 (~2 rad/s, at most ~3 Nm of lead) rather than raising
+i2rt's kp, which every other client of the driver, ABC included, would inherit.
+`config/yam.yaml` keeps 0.15.
+
 ## Shutting down safely
 
 **Signals.** By default, Ctrl-C makes rclpy shut ROS down immediately — after
