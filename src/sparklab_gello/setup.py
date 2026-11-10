@@ -21,6 +21,7 @@ setup(
     entry_points={
         "console_scripts": [
             "gello = sparklab_gello.node:main",
+            "pair = sparklab_gello.pair:main",
         ],
     },
 )

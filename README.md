@@ -185,6 +185,7 @@ headset, open the URL the bridge prints (`https://<this-machine>:8443/`).
 |---|---|
 | drive the arms from the keyboard, one joint at a time | `ros2 run sparklab_yam keyboard` |
 | drive one arm from a GELLO leader | `ros2 run sparklab_gello gello --ros-args -p arm:=left`, then `ros2 service call /gello/arm std_srvs/srv/Trigger` |
+| drive both arms from the GELLO leaders (starts the drivers too) | `ros2 launch sparklab_gello teleop.launch.py`, then `ros2 service call /gello/arm std_srvs/srv/Trigger` |
 | record a dataset | `./scripts/record_manual.sh` |
 | run a policy | `./scripts/rollout.sh` |
 | change the policy's task while it runs | `./scripts/rollout.sh --mode=live`, then `ros2 topic pub --once /rollout/task std_msgs/msg/String "{data: 'pick up the scissors'}"` |

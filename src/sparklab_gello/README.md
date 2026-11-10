@@ -8,6 +8,7 @@ only while homing at start-up.
 sparklab_gello/reader.py   read, validate and convert one leader reading to YAM targets
 sparklab_gello/guard.py    DISARMED / ARMED / FAULT latch with time-based rate limits
 sparklab_gello/node.py     the ROS 2 node: reader -> guard -> command topics
+sparklab_gello/pair.py     /gello/arm and /gello/disarm for both of the launch's GELLO nodes at once
 config/gello_to_yam.yaml   GELLO -> YAM joint sign, zero and lever end stops (provisional)
 config/yam_active_leader_eeprom.json  the leader's EEPROM calibration, read back
 config/*_right.*           the same for the right leader
@@ -27,18 +28,18 @@ ros2 service call /gello/arm std_srvs/srv/Trigger         # start following
 ros2 service call /gello/disarm std_srvs/srv/Trigger      # stop following
 ```
 
-A second leader on the other arm needs its own node name and files:
-`-r __node:=gello_right -p arm:=right -p calibration_path:=... -p mapping_path:=...`.
-
 Both arms and both of the lab's leaders, drivers included, from one launch:
 
 ```bash
 ros2 launch sparklab_gello teleop.launch.py                          # real arms
 ros2 launch sparklab_gello teleop.launch.py sim:=true viewer:=true   # simulated arms
-ros2 service call /gello/arm std_srvs/srv/Trigger                    # left; /gello_right/arm for the right
+ros2 service call /gello/arm std_srvs/srv/Trigger                    # both arms follow, or neither
+ros2 service call /gello/disarm std_srvs/srv/Trigger                 # both stop
 ```
 
-It picks each leader by USB serial (left `5B8E115998`, right `5B79018636`), sets j5/j6
+`/gello/arm` arms both arms or neither: if one is refused, both are disarmed
+again, and the reply says why for each. One arm alone: `/gello/left/arm`,
+`/gello/right/arm` (and `.../disarm`). It picks each leader by USB serial (left `5B8E115998`, right `5B79018636`), sets j5/j6
 `max_step` to 0.3 rad for its drivers ([`DESIGN.md`](../../DESIGN.md#wrist-max_step-in-teleoplaunchpy))
 and, in sim, `state_timeout_s` to 0.5 s. Ctrl-C parks both arms.
 
@@ -81,7 +82,8 @@ which does not affect this.
 | `/<arm>/joint_states` | in, `JointState` | measured pose, joint_1..6 + gripper |
 | `/<arm>/arm/command` | out, `Float64MultiArray` | 6 joint targets (rad), joint_1..6 |
 | `/<arm>/gripper/command` | out, `Float64` | 0 closed .. 1 open |
-| `~/arm`, `~/disarm` | `std_srvs/Trigger` | the reply says why an arm request was refused |
+| `~/arm`, `~/disarm` | `std_srvs/Trigger` | the reply says why an arm request was refused; `/gello/left/...` and `/gello/right/...` in the launch |
+| `/gello/arm`, `/gello/disarm` | `std_srvs/Trigger` | the launch's `pair` node: both of the above at once, both arms or neither |
 
 Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_teleop` does.
 
