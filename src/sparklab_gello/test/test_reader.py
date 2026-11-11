@@ -259,5 +259,72 @@ class GelloHomeTest(unittest.TestCase):
         self.assertFalse(self.bus.torque)
 
 
+class MirrorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bus = HomingBus()
+        self.bus.disconnect = lambda disable_torque=True: None
+        self.t = connected_reader(self.bus)
+        self.t.max_input_speed_deg_s = 1e9  # the fake reaches its goal instantly
+
+    def test_first_mirror_holds_the_present_pose_through_enable_then_goes_to_the_arms_pose(self) -> None:
+        self.bus.deg["joint_2"] = 15.0
+        self.t.read()
+        q = np.array([0.3, 0.2, 0.5, -0.25, 0.1, -0.4])
+        self.t.mirror(q, 0.5)
+        self.assertEqual([e[0] for e in self.bus.log], ["Goal_Velocity", "Torque_Limit", "Goal_Position",
+                                                        "Goal_Position", "enable", "Goal_Position", "Goal_Position"])
+        self.assertEqual(set(self.bus.log[1][1].values()), {reader_mod.MIRROR_TORQUE})
+        self.assertEqual(self.bus.log[2][1]["joint_2"], 15.0)
+        got, g = self.t.read()
+        np.testing.assert_allclose(got, q, atol=1e-9)
+        self.assertAlmostEqual(g, 0.5, delta=0.01)
+
+    def test_goal_is_rewritten_only_past_the_step(self) -> None:
+        self.t.read()
+        self.t.mirror(Z, 0.0)
+        n = len(self.bus.log)
+        self.t.mirror(Z + np.radians(0.3), 0.0)
+        self.assertEqual(len(self.bus.log), n)
+        self.t.mirror(Z + np.radians(1.0), 0.0)
+        self.assertEqual([e[0] for e in self.bus.log[n:]], ["Goal_Position", "Goal_Position"])
+
+    def test_hold_stays_out_while_mirroring_and_release_lets_go_once(self) -> None:
+        self.t.hold = True
+        self.t.read()
+        self.t.mirror(Z, 0.0)
+        n = len(self.bus.log)
+        with mock.patch.object(reader_mod, "HOLD_AFTER_S", 0.0):
+            self.t.read()
+            self.t.read()
+        self.assertEqual(len(self.bus.log), n)
+        self.t.release()
+        self.assertEqual(self.bus.log[-1], ("disable", JOINTS + ["gripper"]))
+        self.assertFalse(self.bus.torque)
+        self.t.release()
+        self.assertEqual(len(self.bus.log), n + 1)
+
+    def test_let_down_folds_the_leader_to_zero_keeps_the_lever_and_lets_go(self) -> None:
+        self.bus.raw = 1500
+        self.t.read()
+        self.t.let_down()
+        self.assertEqual(self.bus.log, [])
+        self.t.mirror(Z + 0.3, 0.5)
+        lever = self.bus.raw
+        self.t.read()
+        self.t.let_down()
+        np.testing.assert_allclose(self.t.read()[0], Z, atol=1e-9)
+        self.assertEqual(self.bus.raw, lever)
+        self.assertFalse(self.bus.torque)
+        n = len(self.bus.log)
+        self.t.let_down()
+        self.assertEqual(len(self.bus.log), n)
+
+    def test_disconnect_while_mirroring_lets_go(self) -> None:
+        self.t.read()
+        self.t.mirror(Z, 0.0)
+        self.t.disconnect()
+        self.assertFalse(self.bus.torque)
+
+
 if __name__ == "__main__":
     unittest.main()

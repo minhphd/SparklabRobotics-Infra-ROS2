@@ -5,7 +5,7 @@
 
 Each leader homes to its arm on start-up. `/gello/arm` then arms both arms, or neither,
 and `/gello/disarm` stops both; one arm alone is `/gello/left/arm` or `/gello/right/arm`.
-Ctrl-C stops everything; the drivers park the arms to zero.
+Ctrl-C stops everything; the drivers park the arms to zero, and the leaders fold there too.
 """
 
 from pathlib import Path

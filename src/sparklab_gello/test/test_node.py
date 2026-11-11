@@ -25,11 +25,22 @@ class FakeReader:
     def __init__(self) -> None:
         self.q, self.gripper = POSE[:6].copy(), float(POSE[6])
         self.error: Exception | None = None
+        self.mirrored: list[tuple[np.ndarray, float]] = []
+        self.releases = self.let_downs = 0
 
     def read(self):
         if self.error is not None:
             raise self.error
         return self.q.copy(), self.gripper
+
+    def mirror(self, q, gripper) -> None:
+        self.mirrored.append((np.array(q), float(gripper)))
+
+    def release(self) -> None:
+        self.releases += 1
+
+    def let_down(self) -> None:
+        self.let_downs += 1
 
     def disconnect(self) -> None:
         pass
@@ -234,3 +245,31 @@ def test_homing_waits_for_the_drivers_startup_ramp_to_finish():
         for n in (driver, probe):
             n.destroy_node()
         rclpy.try_shutdown()
+
+
+def test_disarmed_leader_follows_the_arm_and_goes_limp_once_armed(rig):
+    time.sleep(0.3)
+    q, gripper = rig.reader.mirrored[-1]
+    np.testing.assert_allclose(q, POSE[:6])
+    assert gripper == pytest.approx(POSE[6]) and rig.reader.releases == 0
+    assert rig.call("arm").success
+    time.sleep(0.1)
+    count = len(rig.reader.mirrored)
+    time.sleep(0.3)
+    assert len(rig.reader.mirrored) == count and rig.reader.releases > 0
+
+
+def test_a_fault_lets_the_leader_go(rig):
+    time.sleep(0.2)
+    rig.reader.error = GelloInputError("GELLO read failed")
+    time.sleep(0.2)
+    rig.reader.error = None
+    count = len(rig.reader.mirrored)
+    time.sleep(0.3)
+    assert len(rig.reader.mirrored) == count and rig.reader.releases > 0
+
+
+def test_shutdown_lets_the_leader_down():
+    r = Rig("left")
+    r.close()
+    assert r.reader.let_downs == 1

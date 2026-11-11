@@ -2,7 +2,8 @@
 
 One GELLO (YAM Active Leader) driving one YAM arm, joint to joint, through the
 YAM driver's command topics. Never writes the leader's EEPROM; its torque is on
-only while homing at start-up.
+only while homing at start-up, while it follows the arm disarmed, while it
+folds at shutdown, and while `hold` locks it.
 
 ```
 sparklab_gello/reader.py   read, validate and convert one leader reading to YAM targets
@@ -90,10 +91,20 @@ Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_
 ## Behaviour
 
 - Starts DISARMED and publishes nothing.
+- While DISARMED the leader follows the arm: its servos are driven, at a torque
+  limit of 300 of 1000, to the pose that reads back as the arm's measured pose,
+  and the lever to the arm's gripper; the goal is rewritten only once the arm
+  has moved 0.5 deg. A hand overrides it. `~/arm` then finds the two matched,
+  and the leader goes limp once ARMED, on a fault, or when `joint_states` goes
+  stale. `-p mirror:=false` turns this off.
+- At shutdown (Ctrl-C) a following leader folds to YAM zero, where the drivers
+  park the arms, at homing speed, then goes limp; keep hands off it. A limp
+  leader is left where it is.
 - `~/arm` is refused while another node publishes the same command topics
   (Quest teleop, keyboard) or `joint_states` is not fresh. Otherwise the next
   GELLO reading must be within `arm_tol` (0.15 rad) of the measured pose per
-  joint and `gripper_arm_tol` (0.2) on the gripper.
+  joint. `gripper_arm_tol` (1.0) lets any lever position arm; the gripper then
+  moves to the lever at `max_gripper_speed`.
 - While ARMED, every target moves at most `max_joint_speed` (rad/s) and
   `max_gripper_speed` (1/s) from the previous target, scaled by elapsed time,
   so the publish rate does not change the speed. The driver's `max_step` bounds
@@ -117,12 +128,13 @@ Only the chosen arm is commanded, at `rate_hz` (100) with depth-10 QoS, as `yam_
 | `arm` | `left` | `left` or `right` |
 | `port` | auto | servo adapter; auto when exactly one `/dev/tty.usbmodem*`, `ttyACM*` or `ttyUSB*` exists |
 | `home` | true | drive the leader to the arm's measured pose and the lever to the measured gripper on start-up, then release it |
+| `mirror` | true | while DISARMED, drive the leader to follow the arm at low torque, so arming finds them matched |
 | `hold` | false | lock the leader's arm joints at half torque once every joint has been within 0.5 deg for 1 s; pushing any joint 2 deg releases them. The lever stays free |
 | `calibration_path`, `mapping_path` | this package's `config/` | per leader unit |
 | `rate_hz` | 100.0 | |
 | `state_timeout_s` | 0.1 | |
 | `read_retries`, `max_read_latency_s`, `max_input_speed_deg_s`, `range_margin_deg` | 1, 0.1, 720, 10 | input validation |
-| `max_joint_speed`, `max_gripper_speed`, `max_dt`, `command_timeout`, `arm_tol`, `gripper_arm_tol` | 4.0, 4.0, 0.05, 0.25, 0.15, 0.20 | guard; simulation defaults, not validated for hardware |
+| `max_joint_speed`, `max_gripper_speed`, `max_dt`, `command_timeout`, `arm_tol`, `gripper_arm_tol` | 4.0, 4.0, 0.05, 0.25, 0.15, 1.0 | guard; simulation defaults, not validated for hardware |
 
 ## Tested
 

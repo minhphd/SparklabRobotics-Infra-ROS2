@@ -12,6 +12,9 @@
 Starts DISARMED and publishes nothing until ``~/arm``; the next GELLO reading
 must then match the measured pose. Leaving ARMED publishes the measured pose
 once, so the driver holds there. If this node dies, the driver keeps its last target.
+While DISARMED the leader follows the arm's measured pose at low torque, unless
+``mirror`` is false; it goes limp once ARMED, on a fault, or on stale joint states.
+At shutdown a following leader folds to YAM zero, where the drivers park, then goes limp.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from std_srvs.srv import Trigger
 from sparklab_yam.constants import ARM_JOINTS, HANDS
 from sparklab_yam.run import run
 
-from .guard import ARMED, ArmGuard, GuardLimits
+from .guard import ARMED, DISARMED, ArmGuard, GuardLimits
 from .reader import GelloInputError, GelloReader
 
 ARM_TIMEOUT_S = 1.0
@@ -73,6 +76,7 @@ class GelloNode(Node):
             raise ValueError(f"arm must be one of {HANDS}, got {self._arm!r}")
         rate_hz = self.declare_parameter("rate_hz", 100.0).value
         self._state_timeout = self.declare_parameter("state_timeout_s", 0.1).value
+        self._mirror = self.declare_parameter("mirror", True).value
         defaults = GuardLimits()
         limits = GuardLimits(**{k: float(self.declare_parameter(k, getattr(defaults, k)).value)
                                 for k in GuardLimits.__dataclass_fields__})
@@ -118,7 +122,8 @@ class GelloNode(Node):
         self.create_service(Trigger, "~/disarm", self._on_disarm, callback_group=group)
         self.create_timer(1.0 / rate_hz, self._tick,
                           callback_group=MutuallyExclusiveCallbackGroup())
-        self.get_logger().info(f"DISARMED; driving the {self._arm} arm after "
+        self.get_logger().info(f"DISARMED{'; the leader follows the arm until armed' if self._mirror else ''}; "
+                               f"driving the {self._arm} arm after "
                                f"`ros2 service call {self.get_fully_qualified_name()}/arm std_srvs/srv/Trigger`")
 
     # ---- state ------------------------------------------------------------
@@ -168,19 +173,34 @@ class GelloNode(Node):
         except GelloInputError as e:
             with self._lock:
                 self._fault(str(e))
+            self._mirror_leader(None)
             return
         with self._lock:
             if not self._fresh():
                 if self._guard.state == ARMED or self._guard.pending_since is not None:
                     self._fault(f"/{self._arm}/joint_states silent for "
                                 f"{time.monotonic() - self._present_t:.2f} s")
-                return
-            before = self._guard.state
-            self._guard.check_timeout(self._present)
-            cmd, execute = self._guard.filter(np.append(q, gripper), self._present)
-            if execute:
-                self._publish(cmd)
-            self._left_armed(before, hold=True)
+                target = None
+            else:
+                before = self._guard.state
+                self._guard.check_timeout(self._present)
+                cmd, execute = self._guard.filter(np.append(q, gripper), self._present)
+                if execute:
+                    self._publish(cmd)
+                self._left_armed(before, hold=True)
+                target = self._present.copy() if self._mirror and self._guard.state == DISARMED else None
+        self._mirror_leader(target)
+
+    def _mirror_leader(self, target: np.ndarray | None) -> None:
+        """Servo the leader to target, the arm's measured pose and gripper, or let it go limp on None."""
+        try:
+            if target is None:
+                self._reader.release()
+            else:
+                self._reader.mirror(target[:ARM_JOINTS], target[ARM_JOINTS])
+        except GelloInputError as e:
+            with self._lock:
+                self._fault(str(e))
 
     # ---- services ---------------------------------------------------------
     def _on_arm(self, _request, response: Trigger.Response) -> Trigger.Response:
@@ -228,7 +248,10 @@ class GelloNode(Node):
     def close(self) -> None:
         with self._lock:
             self._disarm("node shutdown")
-        self._reader.disconnect()
+        try:
+            self._reader.let_down()
+        finally:
+            self._reader.disconnect()
 
 
 def main() -> None:

@@ -1,7 +1,8 @@
 """One YAM Active Leader (GELLO) as YAM joint targets.
 
 Reads the leader through its own driver: no ``calibrate()``, ``configure()``,
-``calibrate_trigger()`` or EEPROM write; torque is on only inside ``home()``.
+``calibrate_trigger()`` or EEPROM write; torque is on only inside ``home()``,
+while ``mirror()`` has it follow the arm, and while ``hold`` locks it.
 Driver degrees become YAM radians through ``gello_to_yam.yaml``; the lever's raw
 ticks become a gripper target 0..1.
 
@@ -31,6 +32,8 @@ HOME_TOL_DEG = 2.0  # the servos settle ~1 deg short of the goal
 HOLD_AFTER_S = 1.0  # every joint within HOLD_STILL_DEG this long -> hold
 HOLD_STILL_DEG = 0.5
 HOLD_RELEASE_DEG = 2.0  # any joint pushed this far from the hold -> release
+MIRROR_TORQUE = 300  # raw Torque_Limit while mirroring, below homing's: a hand overrides it
+MIRROR_STEP_DEG = 0.5  # rewrite the mirror goal only past this, so the arm's jitter is not echoed
 
 
 class GelloInputError(RuntimeError):
@@ -82,6 +85,9 @@ class GelloReader:
         self._half_range_deg: dict[str, float] = {}
         self._raw_max = 0
         self._prev: tuple[float, dict[str, float]] | None = None
+        self._last: tuple[dict[str, float], float] | None = None
+        self._mirroring = False
+        self._mirror_goal: tuple[dict[str, float], int] | None = None
         self._still: tuple[float, dict[str, float]] | None = None
         self._held: dict[str, float] | None = None
 
@@ -127,10 +133,7 @@ class GelloReader:
         """
         bus = self._leader.bus
         motors = NAMES + ["gripper"]
-        goal = {n: float(self._joint_map[n]["zero_deg"]
-                         + self._joint_map[n]["sign"] * np.degrees(q[j]))
-                for j, n in enumerate(NAMES)}
-        raw_goal = int(round(self._raw_a + np.clip(gripper, 0.0, 1.0) * (self._raw_b - self._raw_a)))
+        goal, raw_goal = self._goal(q, gripper)
         bus.sync_write("Goal_Velocity", {n: HOME_SPEED for n in motors}, normalize=False)
         bus.sync_write("Torque_Limit", {n: HOME_TORQUE for n in motors}, normalize=False)
         try:
@@ -153,6 +156,61 @@ class GelloReader:
         finally:
             bus.disable_torque(motors)
 
+    def _goal(self, q: np.ndarray, gripper: float) -> tuple[dict[str, float], int]:
+        """Leader joint degrees and lever raw ticks that read back as q and gripper."""
+        goal = {n: float(self._joint_map[n]["zero_deg"] + self._joint_map[n]["sign"] * np.degrees(q[j]))
+                for j, n in enumerate(NAMES)}
+        raw = int(round(self._raw_a + np.clip(gripper, 0.0, 1.0) * (self._raw_b - self._raw_a)))
+        return goal, raw
+
+    def mirror(self, q: np.ndarray, gripper: float) -> None:
+        """Servo the leader, at MIRROR_TORQUE, to the pose that reads back as q, the lever to gripper.
+
+        The first call enables torque, holding the last reading through the enable as home()
+        does; later calls rewrite the goal only once it has moved MIRROR_STEP_DEG.
+        q: YAM joint positions (6,) in rad; gripper: 0 closed .. 1 open.
+        """
+        bus = self._leader.bus
+        motors = NAMES + ["gripper"]
+        goal, raw_goal = self._goal(q, gripper)
+        try:
+            if not self._mirroring:
+                deg, raw = self._last
+                bus.sync_write("Goal_Velocity", {n: HOME_SPEED for n in motors}, normalize=False)
+                bus.sync_write("Torque_Limit", {n: MIRROR_TORQUE for n in motors}, normalize=False)
+                bus.sync_write("Goal_Position", deg)
+                bus.sync_write("Goal_Position", {"gripper": int(raw)}, normalize=False)
+                bus.enable_torque(motors)
+                self._mirroring, self._mirror_goal, self._held, self._still = True, None, None, None
+            last = self._mirror_goal
+            if (last is None or max(abs(goal[n] - last[0][n]) for n in NAMES) > MIRROR_STEP_DEG
+                    or abs(raw_goal - last[1]) * 360 / (self._raw_max + 1) > MIRROR_STEP_DEG):
+                bus.sync_write("Goal_Position", goal)
+                bus.sync_write("Goal_Position", {"gripper": raw_goal}, normalize=False)
+                self._mirror_goal = (goal, raw_goal)
+        except (ConnectionError, OSError) as e:
+            raise GelloInputError(f"GELLO mirror write failed: {e}") from e
+
+    def let_down(self) -> None:
+        """Fold a mirroring leader to YAM zero, where the drivers park the arms, then let it go limp.
+
+        The lever stays where it is. Does nothing to a leader that is already limp.
+        """
+        if not self._mirroring:
+            return
+        self.home(np.zeros(ARM_JOINTS), (self._last[1] - self._raw_a) / (self._raw_b - self._raw_a))
+        self._mirroring = False
+
+    def release(self) -> None:
+        """Let a mirroring leader go limp; does nothing otherwise."""
+        if not self._mirroring:
+            return
+        try:
+            self._leader.bus.disable_torque(NAMES + ["gripper"])
+        except (ConnectionError, OSError) as e:
+            raise GelloInputError(f"GELLO release failed: {e}") from e
+        self._mirroring = False
+
     def read(self) -> tuple[np.ndarray, float]:
         """One validated reading as YAM targets.
 
@@ -160,7 +218,7 @@ class GelloReader:
             the gripper target 0 closed .. 1 open.
         """
         deg, raw = self._read()
-        if self.hold:
+        if self.hold and not self._mirroring:
             self._update_hold(deg)
         q = np.empty(ARM_JOINTS)
         for j in range(ARM_JOINTS):
@@ -208,6 +266,7 @@ class GelloReader:
             raise GelloInputError(f"GELLO read took {now - t0:.3f} s "
                                   f"(limit {self.max_read_latency_s:.3f} s)")
         self._validate(deg, raw, now)
+        self._last = (deg, float(raw))
         return deg, float(raw)
 
     def _validate(self, deg: dict, raw, now: float) -> None:
@@ -239,9 +298,9 @@ class GelloReader:
     def disconnect(self) -> None:
         if self._leader is not None:
             try:
-                if self._held is not None:
-                    self._leader.bus.disable_torque(NAMES)
+                if self._held is not None or self._mirroring:
+                    self._leader.bus.disable_torque(NAMES + ["gripper"] if self._mirroring else NAMES)
             finally:
-                self._held = None
+                self._held, self._mirroring = None, False
                 self._leader.bus.disconnect(disable_torque=False)
                 self._leader = None

@@ -40,7 +40,7 @@ class GuardLimits:
     max_dt: float = 0.05
     command_timeout: float = 0.25
     arm_tol: float = 0.15
-    gripper_arm_tol: float = 0.20
+    gripper_arm_tol: float = 1.0
     arm_request_timeout: float = 15.0
 
 

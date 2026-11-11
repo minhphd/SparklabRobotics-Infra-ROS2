@@ -302,6 +302,40 @@ baseline. Here the release is a 2 deg push read from the position the node
 already polls, so there is no current baseline to sample or threshold to tune,
 and no extra bus read per tick.
 
+### The leader follows the arm while disarmed
+
+Arming needs the leader within 0.15 rad of the arm on every joint. Homed once at
+start-up and then free, it drifts off whenever the arm moves without it: a policy
+run, a disarm, a park. So while DISARMED the node servos the leader to the arm's
+measured pose; arming always finds them matched, and an operator can take over a
+running policy without a jump. The torque limit is 300 of 1000, under homing's
+500, so a hand overrides it. By the dither measurements below, the P term then
+leaves it within about a degree, inside the arming tolerance. The goal is
+rewritten only past 0.5 deg, so the left wrist's ~7 mrad buzz is not echoed into
+the leader, and `hold` is skipped while mirroring.
+
+Cutting a following leader's torque drops it under gravity, so at shutdown the
+node first folds it to YAM zero, where the drivers park the arms, through
+`home()`, and releases it there.
+
+### The lever does not gate arming
+
+The left lever cannot be servoed closer than ~13 deg to closed: homing ended
+13.4 deg off and mirroring left it 0.228 short of a closed gripper (2026-11-10),
+so every arm request was refused against `gripper_arm_tol` 0.2. A lever mismatch
+only moves the gripper, at `max_gripper_speed`, so the tolerance is now 1.0, the
+whole range. The joints keep `arm_tol`; a joint mismatch would swing the arm.
+
+### Force feedback while armed: tried and removed
+
+On 2026-11-10 the armed leader was servoed, at the mirror torque, to the arm's
+measured pose plus the leader-arm gap clipped to 0.05 rad per joint, so it moved
+freely near the arm and was pulled back past that. On the rig it felt like high
+friction and made teleop harder: inside the deadband the goal tracked the leader
+in 0.5 deg steps, and powered servos resist being back-driven, so the leader now
+goes limp once ARMED. Powering a joint only while it is past the deadband was
+not tried.
+
 ### Leader dither: tried and removed
 
 robots_realtime enables the leader driver's stiction-breaking dither by default.
