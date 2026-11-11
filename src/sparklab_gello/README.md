@@ -40,8 +40,9 @@ ros2 service call /gello/disarm std_srvs/srv/Trigger                 # both stop
 
 `/gello/arm` arms both arms or neither: if one is refused, both are disarmed
 again, and the reply says why for each. One arm alone: `/gello/left/arm`,
-`/gello/right/arm` (and `.../disarm`). It picks each leader by USB serial (left `5B8E115998`, right `5B79018636`), sets j5/j6
-`max_step` to 0.3 rad for its drivers ([`DESIGN.md`](../../DESIGN.md#wrist-max_step-in-teleoplaunchpy))
+`/gello/right/arm` (and `.../disarm`). It picks each leader by USB serial (left `5B8E115998`, right `5B79018636`), sets its
+drivers' j5/j6 `kp` to 25 and turns on their `velocity_feedforward`
+([`DESIGN.md`](../../DESIGN.md#wrist-gains-and-velocity-feed-forward-in-teleoplaunchpy))
 and, in sim, `state_timeout_s` to 0.5 s. Ctrl-C parks both arms.
 
 On start-up the node drives the leader to the pose that maps to the arm's measured pose and the

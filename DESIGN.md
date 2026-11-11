@@ -346,15 +346,39 @@ walked instead of oscillating (j5 -13 deg in 2 s): the dither re-centres on the
 present pose every tick, so stiction ratchets it one way, and an armed follower
 would drift with it. The driver also rewrites `P_Coefficient` in unlocked EEPROM.
 
-### Wrist max_step in teleop.launch.py
+### Wrist gains and velocity feed-forward in teleop.launch.py
 
-With the driver capping the lead at `max_step`, a joint tops out near
-`kp * max_step / kd` before friction: ~2.1 rad/s for j1–3, ~4 for j4, but ~1
-for j5/j6 (kp 10, kd 1.5). On the real arms (2026-10-30) j5 lagged on both
-sides, with the driver clamping leads of 0.24–0.26 rad. The launch doubles
-j5/j6 `max_step` to 0.3 (~2 rad/s, at most ~3 Nm of lead) rather than raising
-i2rt's kp, which every other client of the driver, ABC included, would inherit.
-`config/yam.yaml` keeps 0.15.
+i2rt sends every position target with a target velocity of zero, so each
+motor's kd term brakes all motion, and a joint trails a moving target by about
+kd/kp: 62 ms on j1–3 (kp 80, kd 5), 37 ms on j4, 150 ms on j5/j6 (kp 10, kd 1.5).
+A GELLO bag on the real arms (2026-11-10) measured 90–132 ms on j1–3, 58 ms on
+j4 and 134–156 ms on j5/j6, with static error under 0.025 rad. Before that
+(2026-10-30) the launch doubled j5/j6 `max_step` to 0.3 rather than raise
+i2rt's kp, which every client would have inherited; `kp` is now a driver
+parameter, set per launch.
+
+The launch turns on `velocity_feedforward`, so kd damps the arm's lag behind
+the GELLO rather than its motion. The bag, replayed through the driver's clamp
+and feed-forward into a MuJoCo model of the arm (joint damping 2/1/2/1/0.5/0
+N·m·s/rad and armature fitted on the left arm, checked on the right), predicted
+24–42 ms on j1–3 and 10 ms on j6. A second bag the same day measured 44–52 ms
+on j1–3, 24–26 ms on j4, 30–48 ms on j5 and 20–24 ms on j6. The rest on j1–3 is
+mostly gearbox drag, which feed-forward does not cancel.
+
+- **Capped at kp·max_step/kd**, so it adds at most the torque the `max_step`
+  lead already allows: a command's worst-case torque at most doubles.
+- **Opt-in.** Quest teleop, ABC, LeRobot, capx and the coding agent publish
+  `arm/command` at their own rates and have not been measured with it.
+- **Written under i2rt's command lock**, not through `command_joint_state`,
+  which installs an all-zero command, gains included, before taking its lock.
+- **Dropped 50 ms after the commands stop**, so a disarmed arm settles on its
+  last target rather than kd·v/kp off it.
+- **Wrist kp 25, kd still 1.5, `max_step` back to 0.15.** At kp 10, j5 bent
+  0.1–0.25 rad under grasp loads. kd 2.4 (the same damping ratio) gained nothing
+  in the replay and, without armature, chattered at the 7 Nm limit; the left
+  wrist already buzzes near 48 Hz at kd 1.5. A 0.15 rad lead at kp 25 is
+  3.75 Nm, about the old 0.3 × 10. Afterwards left j6's buzz at rest rose a
+  little (velocity rms 0.15 → 0.24 rad/s, 4.6 mrad peak to peak).
 
 ## Shutting down safely
 

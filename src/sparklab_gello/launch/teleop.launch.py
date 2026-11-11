@@ -29,15 +29,17 @@ def generate_launch_description() -> LaunchDescription:
     sim, viewer = LaunchConfiguration("sim"), LaunchConfiguration("viewer")
     # Sim drivers stall past 0.1 s when the shared PC is loaded; hardware keeps the default.
     state_timeout = PythonExpression(["0.5 if '", sim, "' == 'true' else 0.1"])
-    # yam.yaml's max_step with j5/j6 doubled, for this launch only. See DESIGN.md#the-gello-node.
-    max_step = [0.133, 0.133, 0.133, 0.15, 0.3, 0.3]
+    # i2rt's kp with j5/j6 2.5x stiffer, plus velocity feed-forward, for this launch only.
+    # See DESIGN.md#wrist-gains-and-velocity-feed-forward-in-teleoplaunchpy.
+    kp = [80.0, 80.0, 80.0, 40.0, 25.0, 25.0]
     nodes = [Node(package="sparklab_gello", executable="pair", name="gello")]
     for side, (serial, calibration, mapping) in LEADERS.items():
         # Parking runs after SIGINT and takes park_duration_s, twice that if the arm lags;
         # launch's default 5 s before escalating to SIGTERM would cut it short.
         nodes.append(Node(package="sparklab_yam", executable="driver", name="yam_driver",
                           namespace=side,
-                          parameters=[params, {"sim": sim, "viewer": viewer, "max_step": max_step}],
+                          parameters=[params, {"sim": sim, "viewer": viewer, "kp": kp,
+                                               "velocity_feedforward": True}],
                           sigterm_timeout="30"))
         nodes.append(Node(package="sparklab_gello", executable="gello", name=side, namespace="gello", parameters=[{
             "arm": side,

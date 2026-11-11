@@ -57,6 +57,13 @@ Things to know:
 
 - Each command is **clamped** so no joint moves more than `max_step` (default
   0.133 rad for joints 1–3, 0.15 for 4–6) away from where it is now.
+- `kp` and `kd` (joints 1–6) are the arm's gains; the defaults are i2rt's
+  YAM-Ultra `[80, 80, 80, 40, 10, 10]` and `[5, 5, 5, 1.5, 1.5, 1.5]`.
+- With `velocity_feedforward: true` (off by default) each command also carries
+  the commands' own velocity, low-passed over 20 ms and capped at
+  `kp * max_step / kd`, as the motors' target velocity; it drops to zero 50 ms
+  after the commands stop. sparklab_gello's `teleop.launch.py` turns it on. See
+  [`DESIGN.md`](../../DESIGN.md#wrist-gains-and-velocity-feed-forward-in-teleoplaunchpy).
 - If the motors stop responding, `joint_states` **stops**. Silence means fault.
 - With `rest_on_start: true` (off by default) it **ramps to the rest pose**
   `[0, 0.5, 1.0, -1.0, 0, 0]` (`DEFAULT_Q_REST`) on start, over `park_duration_s`,
@@ -69,7 +76,7 @@ Things to know:
 
 Parameters (in `config/yam.yaml`): `channel`, `sim`, `rate_hz`, `max_step`,
 `park_duration_s`, `park_on_exit`, `rest_on_start`, `enable_auto_recovery`, `viewer`,
-`ee_mass`, `gravity_comp_factor`, `zero_gravity_comp_factor`.
+`ee_mass`, `gravity_comp_factor`, `zero_gravity_comp_factor`, `kp`, `kd`, `velocity_feedforward`.
 
 **Tuning gravity compensation.** All three settings are in `config/yam.yaml`:
 

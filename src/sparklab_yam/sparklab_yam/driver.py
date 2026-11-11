@@ -15,8 +15,12 @@ Topics are relative to the namespace (one arm per namespace):
                                             damped, gripper holding, commands ignored;
                                             false: hold where it is
 
-Every arm command is clamped to ``max_step`` from the measured pose. A dead
-control loop stops joint_states, which is how clients detect it. With
+Every arm command is clamped to ``max_step`` from the measured pose. ``kp`` and
+``kd`` set the arm joints' gains. With ``velocity_feedforward`` each command also
+carries the low-passed velocity of the arm commands as the motors' target
+velocity, at most ``kp * max_step / kd``; it drops to zero once the commands
+stop for ``FF_TIMEOUT_S``. A dead control loop stops joint_states, which is how
+clients detect it. With
 ``rest_on_start`` the arm ramps to the rest pose (DEFAULT_Q_REST) on start,
 ignoring commands until it is there. On SIGINT or SIGTERM the arm parks before
 torque is cut, unless ``park_on_exit`` is false.
@@ -48,6 +52,10 @@ JOINT_NAMES = [f"joint_{j}" for j in range(1, ARM_JOINTS + 1)] + ["gripper"]
 RAMP_DT = 0.01
 RAMP_TOL = 0.03
 """rad from its target at which a park or startup ramp counts the arm as there."""
+FF_TAU_S = 0.02
+"""s, low-pass on the arm commands' velocity; a step moves it by at most step / FF_TAU_S."""
+FF_TIMEOUT_S = 0.05
+"""s without an arm command after which the target velocity drops to zero."""
 
 
 class YamDriver(Node):
@@ -72,6 +80,11 @@ class YamDriver(Node):
         self._float_gravity = np.asarray(self.declare_parameter(
             "zero_gravity_comp_factor", [1.0] * ARM_JOINTS).value, dtype=float)
         viewer = self.declare_parameter("viewer", False).value
+        # i2rt's YAM-Ultra arm gains; the gripper keeps its own.
+        kp = np.asarray(self.declare_parameter("kp", [80.0, 80.0, 80.0, 40.0, 10.0, 10.0]).value, dtype=float)
+        kd = np.asarray(self.declare_parameter("kd", [5.0, 5.0, 5.0, 1.5, 1.5, 1.5]).value, dtype=float)
+        self._feedforward = self.declare_parameter("velocity_feedforward", False).value
+        self._ff_max = kp * self._max_step / kd
 
         self.get_logger().info(
             f"connecting {channel}{' (SIM)' if sim else ''} — the gripper self-homes, keep clear "
@@ -91,10 +104,20 @@ class YamDriver(Node):
         self._held_gains = None  # (kp, kd, gravity factor) to restore after zero gravity
         self._dead_logged = False
         self._last_clamp_warn = 0.0
+        self._ff = np.zeros(ARM_JOINTS)  # low-passed arm command velocity
+        self._vel = np.zeros(ARM_JOINTS + 1)  # target velocity sent with each command
+        self._last_target, self._last_arm_t = None, -np.inf
         # A copy: i2rt hands out its live joint-state array, and _cmd is edited in place.
         self._cmd = np.array(self._robot.get_joint_pos(), dtype=float)
         self.get_logger().info(
             f"pose at startup: {np.round(self._cmd[:ARM_JOINTS], 3).tolist()} (park target is zero)")
+        # SimRobots have no gains.
+        if hasattr(self._robot, "update_kp_kd"):
+            info = self._robot.get_robot_info()
+            self._robot.update_kp_kd(np.append(kp, info["kp"][ARM_JOINTS:]), np.append(kd, info["kd"][ARM_JOINTS:]))
+            self._command(self._cmd.copy())
+        self.get_logger().info(f"arm kp {kp.tolist()}, kd {kd.tolist()}, velocity feed-forward "
+                               f"{'on' if self._feedforward else 'off'}")
 
         self._fk = IKSolver()
         arm = self.get_namespace().strip("/") or "arm"
@@ -110,6 +133,8 @@ class YamDriver(Node):
         self.create_service(Trigger, "park", self._on_park, callback_group=group)
         self.create_service(SetBool, "zero_gravity", self._on_zero_gravity, callback_group=group)
         self.create_timer(1.0 / rate_hz, self._publish_state, callback_group=group)
+        if self._feedforward:
+            self.create_timer(1.0 / rate_hz, self._expire_feedforward, callback_group=group)
 
         self._viewer = None
         if viewer:
@@ -124,9 +149,20 @@ class YamDriver(Node):
         chain = getattr(self._robot, "motor_chain", None)
         return chain is None or getattr(chain, "running", True)
 
-    def _command(self, q: np.ndarray) -> None:
-        """Command the robot; in sim, also move joints the SimRobot leaves to its equalities."""
+    def _command(self, q: np.ndarray, vel: np.ndarray | None = None) -> None:
+        """Command the robot; in sim, also move joints the SimRobot leaves to its equalities.
+
+        vel: target joint velocities, gripper included; none or all zero sends zero.
+        """
         self._robot.command_joint_pos(q)
+        vel = np.zeros(len(q)) if vel is None else np.array(vel, dtype=float)
+        if self._sim:
+            # The SimRobot reports this as the joints' velocity until told otherwise.
+            self._robot.command_target_vel(vel)
+        elif vel.any():
+            # command_joint_state hands i2rt's control loop all-zero gains for a moment.
+            with self._robot._command_lock:
+                self._robot._commands.vel = self._robot.remapper.to_robot_joint_vel_space(vel)
         if self._sim:
             # Same lock the viewer syncs under, so it never draws a half-updated pose.
             with self._robot._lock:
@@ -177,6 +213,7 @@ class YamDriver(Node):
         if target.shape != (ARM_JOINTS,):
             self.get_logger().error(f"arm/command needs {ARM_JOINTS} values, got {len(target)}")
             return
+        now = time.monotonic()
         with self._lock:
             if self._ramping or self._zero_gravity or not self._alive():
                 return
@@ -184,7 +221,15 @@ class YamDriver(Node):
             step = target - present
             overshoot = np.abs(step) - self._max_step
             self._cmd[:ARM_JOINTS] = present + np.clip(step, -self._max_step, self._max_step)
-            self._command(self._cmd.copy())
+            if self._feedforward:
+                dt = now - self._last_arm_t
+                if dt > FF_TIMEOUT_S:
+                    self._ff[:] = 0.0
+                else:
+                    self._ff += (target - self._last_target - dt * self._ff) / (FF_TAU_S + dt)
+                self._last_target, self._last_arm_t = target, now
+                self._vel[:ARM_JOINTS] = np.clip(self._ff, -self._ff_max, self._ff_max)
+            self._command(self._cmd.copy(), self._vel)
         if np.any(overshoot > 0) and time.monotonic() - self._last_clamp_warn > 1.0:
             self._last_clamp_warn = time.monotonic()
             j = int(np.argmax(overshoot))
@@ -197,7 +242,16 @@ class YamDriver(Node):
             if self._ramping or self._zero_gravity or not self._alive():
                 return
             self._cmd[ARM_JOINTS] = float(np.clip(msg.data, 0.0, 1.0))
-            self._command(self._cmd.copy())
+            self._command(self._cmd.copy(), self._vel)
+
+    def _expire_feedforward(self) -> None:
+        """Drop the target velocity once arm commands stop, so the arm settles on its last target."""
+        with self._lock:
+            if not self._vel.any() or time.monotonic() - self._last_arm_t <= FF_TIMEOUT_S:
+                return
+            self._vel[:] = 0.0
+            if not (self._ramping or self._zero_gravity) and self._alive():
+                self._command(self._cmd.copy())
 
     # ---- parking ----------------------------------------------------------
     def _ramp(self, target: np.ndarray) -> bool:

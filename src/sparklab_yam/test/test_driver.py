@@ -44,8 +44,8 @@ def gains(monkeypatch):
 
 @pytest.fixture
 def rig(request):
-    rest = "true" if getattr(request, "param", False) else "false"
-    rclpy.init(args=["--ros-args", "-p", "sim:=true", "-p", "park_duration_s:=0.5", "-p", f"rest_on_start:={rest}"])
+    params = {"sim": "true", "park_duration_s": "0.5", "rest_on_start": "false", **getattr(request, "param", {})}
+    rclpy.init(args=["--ros-args", *[a for k, v in params.items() for a in ("-p", f"{k}:={v}")]])
     driver, probe = YamDriver(), Node("probe")
     executor = MultiThreadedExecutor()
     executor.add_node(driver)
@@ -127,7 +127,7 @@ def test_park_ramps_everything_to_zero(rig):
     assert list(_latest(states).position) == pytest.approx([0.0] * 7)
 
 
-@pytest.mark.parametrize("rig", [True], indirect=True)
+@pytest.mark.parametrize("rig", [{"rest_on_start": "true"}], indirect=True)
 def test_start_ramps_to_the_rest_pose_and_a_park_waits_for_it(rig):
     probe, states = rig
     time.sleep(0.2)
@@ -228,3 +228,67 @@ def test_park_while_floating_restores_gains_first(gains, rig):
     assert _call(probe, Trigger, "park", Trigger.Request()).success
     assert gains[-1][0].tolist() == KP.tolist()
     assert list(_latest(states).position) == pytest.approx([0.0] * 7)
+
+
+FEEDFORWARD = {"velocity_feedforward": "true"}
+
+
+def _sweep(probe, joint: int, speed: float, seconds: float) -> None:
+    """Publish arm commands at 100 Hz moving one joint from zero at speed, a gripper command after each."""
+    arm = probe.create_publisher(Float64MultiArray, "arm/command", 10)
+    gripper = probe.create_publisher(Float64, "gripper/command", 10)
+    time.sleep(0.3)
+    t0 = time.monotonic()
+    while (t := time.monotonic() - t0) < seconds:
+        q = [0.0] * 6
+        q[joint] = speed * t
+        arm.publish(Float64MultiArray(data=q))
+        gripper.publish(Float64(data=0.5))
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("rig", [FEEDFORWARD], indirect=True)
+def test_feedforward_sends_the_command_velocity_and_drops_it_when_commands_stop(rig):
+    probe, states = rig
+    _sweep(probe, 0, 0.5, 0.6)
+    moving = [s.velocity for s in states[-20:]]
+    time.sleep(0.15)
+    assert all(v[0] == pytest.approx(0.5, abs=0.15) for v in moving)  # gripper commands keep it
+    assert all(v[1:] == pytest.approx([0.0] * 6) for v in moving)
+    assert list(states[-1].velocity) == [0.0] * 7
+
+
+@pytest.mark.parametrize("rig", [FEEDFORWARD], indirect=True)
+def test_feedforward_is_capped_at_kp_max_step_over_kd(rig):
+    probe, states = rig
+    _sweep(probe, 0, 10.0, 0.25)
+    cap = KP[0] * DEFAULT_MAX_RELATIVE_TARGET[0] / KD[0]
+    assert max(s.velocity[0] for s in states) == pytest.approx(cap)
+
+
+def test_feedforward_is_off_by_default(rig):
+    probe, states = rig
+    _sweep(probe, 0, 0.5, 0.3)
+    assert all(v == 0.0 for s in states for v in s.velocity)
+
+
+@pytest.mark.parametrize("rig", [{"kp": "[80.0,80.0,80.0,40.0,25.0,25.0]", "kd": "[5.0,5.0,5.0,1.5,2.0,2.0]"}],
+                         indirect=True)
+def test_kp_and_kd_set_the_arm_gains_and_the_gripper_keeps_its_own(gains, rig):
+    kp, kd, _ = next(g for g in gains if isinstance(g, tuple))
+    assert kp.tolist() == [80.0, 80.0, 80.0, 40.0, 25.0, 25.0, 20.0]
+    assert kd.tolist() == [5.0, 5.0, 5.0, 1.5, 2.0, 2.0, 0.5]
+
+
+def test_on_hardware_the_velocity_goes_under_i2rt_s_command_lock():
+    sent = []
+    robot = SimpleNamespace(command_joint_pos=sent.append, _command_lock=threading.Lock(),
+                            _commands=SimpleNamespace(vel=None),
+                            remapper=SimpleNamespace(to_robot_joint_vel_space=lambda v: v))
+    driver = SimpleNamespace(_robot=robot, _sim=False)
+    vel = np.array([0.5, 0, 0, 0, 0, 0, 0])
+    YamDriver._command(driver, np.zeros(7), vel)
+    assert robot._commands.vel.tolist() == vel.tolist() and robot._commands.vel is not vel
+    robot._commands.vel = "untouched"
+    YamDriver._command(driver, np.zeros(7), np.zeros(7))
+    assert robot._commands.vel == "untouched"  # command_joint_pos already sent zero
